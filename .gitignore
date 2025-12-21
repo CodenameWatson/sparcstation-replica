@@ -1,0 +1,27 @@
+# --- VM artifacts (DO NOT COMMIT) ---
+*.qcow2
+*.img
+*.iso
+*.raw
+*.vmdk
+
+# --- Runtime artifacts ---
+sparc_lock/kiosk.log
+sparc_lock/*.log
+sparc_vm/*.log
+sparc_vm/*.pid
+*.pid
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- Optional: keep personal assets out of git (placeholders kept) ---
+sparc_lock/images/*
+sparc_lock/sounds/*
+!sparc_lock/images/.keep
+!sparc_lock/sounds/.keep
