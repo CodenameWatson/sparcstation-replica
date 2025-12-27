@@ -9,6 +9,8 @@ import math
 import shutil
 import socket
 import datetime
+import fcntl
+
 
 # ---------------- CONFIG ----------------
 GRID_X = 3
@@ -1644,3 +1646,4 @@ finally:
         pygame.quit()
     except Exception:
         pass
+

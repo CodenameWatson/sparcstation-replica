@@ -1,0 +1,6 @@
+{
+  "id": "placeholder",
+  "title": "Placeholder Game",
+  "exec": ["bash", "-lc", "sleep 2"],
+  "cwd": "/home/pi/sparc_games/installed/placeholder"
+}
