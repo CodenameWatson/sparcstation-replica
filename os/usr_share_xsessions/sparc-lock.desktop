@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=SPARC Lock
+Comment=SPARCstation Puzzle Lock Kiosk
+Exec=/home/pi/sparc_lock/start-lock-session.sh
+Type=Application

@@ -1,0 +1,31 @@
+# Logs
+*.log
+*.log.*
+kiosk.log*
+openbox.log
+lxpanel.log
+pi_mode.log
+return_to_lock.log
+vncviewer.log
+qemu-sparc.log
+
+# Runtime
+*.pid
+__pycache__/
+*.pyc
+
+# Backups
+*.bak
+*.bak.*
+*~
+
+# VM media / disks
+*.qcow2
+*.iso
+*.img
+
+# Personal puzzle assets 
+sparc_lock/images/*
+sparc_lock/sounds/*
+!sparc_lock/images/.keep
+!sparc_lock/sounds/.keep

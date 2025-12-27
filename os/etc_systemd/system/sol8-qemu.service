@@ -1,0 +1,18 @@
+[Unit]
+Description=Solaris 8 SPARC VM (QEMU SS-5, VNC localhost)
+After=network.target
+
+[Service]
+Type=forking
+User=pi
+WorkingDirectory=/home/pi/sparc_vm
+PIDFile=/home/pi/sparc_vm/qemu-sparc.pid
+ExecStart=/home/pi/sparc_vm/run_sol8.sh
+ExecStop=/home/pi/sparc_vm/stop_sol8.sh
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=20
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
