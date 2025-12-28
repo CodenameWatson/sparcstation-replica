@@ -1,216 +1,173 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame
-import random
+
+
 import os
-import subprocess
 import sys
 import time
 import math
-import shutil
-import socket
+import random
 import datetime
-import fcntl
+import pygame
 
-
-# ---------------- CONFIG ----------------
-GRID_X = 3
-GRID_Y = 4
-
-# snap/lock (touch-friendly) — square puzzle
-SNAP_DIST = 190  # px from slot to auto-snap+lock
+# ============================================================
+# Configuration
+# ============================================================
+os.environ.setdefault("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, "images")
 SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
 
-# QEMU control
-QEMU_PIDFILE = "/home/pi/sparc_vm/qemu-sparc.pid"
-RUN_QEMU_CMD = ["/home/pi/sparc_vm/run_sol8.sh"]  # headless QEMU with VNC :1
-VM_VNC_TARGET = "127.0.0.1:1"
-VM_VNC_HOST = "127.0.0.1"
-VM_VNC_PORT = 5901  # :1
+# Branding
+BRAND_TEXT = "Glover SPARCstation"
+BRAND_SUB = "Puzzle Lock"
 
-# VNC viewer args (kiosk-safe)
-VNCVIEWER_ARGS = [
-    "-FullScreen=1",
-    "-Shared=1",
-    "-RemoteResize=0",
-    "-AcceptClipboard=0",
-    "-SendClipboard=0",
-    "-FullscreenSystemKeys=1",
-]
-VNCVIEWER_LOG = "/home/pi/sparc_lock/vncviewer.log"
-LAUNCH_SOLARIS_SH = "/home/pi/sparc_lock/launch_solaris.sh"
+# PIN (lock-screen PIN unlock only)
+ADMIN_PIN = "1193"
+PIN_MAX_LEN = 12
 
-# Exit code used to signal "switch to Pi desktop" to the session wrapper
-ADMIN_DESKTOP_EXIT_CODE = 42
+# Status bar
+SHOW_STATUS_BAR = True
+STATUS_BAR_H = 40
 
-# Auto re-lock after inactivity while VM is shown (milliseconds)
-VM_IDLE_LOCK_MS = 1 * 30 * 1000  # 30 seconds
+# ---------------- LOCK UI VISIBILITY ----------------
+LOCK_UI_START_HIDDEN = True
+LOCK_UI_AUTOHIDE_S = 6.0
+LOCK_UI_MOUSE_MOVE_THRESH = 10
+LOCK_UI_FADE_S = 0.18   # visual fade of dock (seconds)
 
-# VM idle/relock tracking (xprintidle-based)
-VM_IDLE_POLL_MS = 500
-VM_IDLE_ACTIVITY_DROP_MS = 1500  # idle drops by ~this much => user activity occurred
+# ---------------- LOCK SLIDESHOW / EFFECTS ----------------
+LOCK_BG_CYCLE_S = 18.0
 
-# Layout: tray appears only in puzzle modes
-TRAY_H_FRAC = 0.28
-TRAY_MARGIN = 14
+# Visible photo scale on lock:
+#   "contain" = show entire image, no cropping
+#   "cover"   = fill screen, may crop
+LOCK_VISIBLE_SCALE_MODE = "contain"
 
-# Sounds (optional; place wav files in ./sounds/)
+# Background layer (behind visible photo) uses cover + blur + pan.
+LOCK_BG_PAN_RANGE_PX = 900
+LOCK_BG_PAN_SPEED_PX_S = 90.0
+
+# Background blur quality
+#   "hq" = PIL Gaussian blur (best quality) with mild downscale for speed
+#   "downscale" = cheap downscale/upscale blur
+LOCK_BG_BLUR_METHOD = "hq"
+LOCK_BG_HQ_DOWNSCALE = 2
+LOCK_BG_HQ_RADIUS = 10
+
+LOCK_BG_BLUR_DOWNSCALE = 12
+LOCK_BG_DIM_ALPHA = 60
+
+# Breaking transitions on slideshow change
+LOCK_TRANSITION_ENABLE = True
+LOCK_FADEIN_S = 0.55
+
+LOCK_TRANSITION_STYLES = ["shatter", "blinds", "explode", "drop"]
+LOCK_TRANSITION_STYLE = "random"  # "random" or one of the styles above
+LOCK_BREAK_DURATIONS = {
+    "shatter": 0.85,
+    "blinds":  0.95,
+    "explode": 0.80,
+    "drop":    0.90,
+}
+
+LOCK_SHATTER_TILE_TARGET = 180
+LOCK_SHATTER_GRAVITY = 1200.0
+
+# Playlist behavior
+LOCK_BG_RANDOM_START = True
+LOCK_BG_SHUFFLE = False
+
+# Colors
+COLOR_BG = (0, 0, 0)
+COLOR_TRAY = (18, 18, 18)
+COLOR_LINE = (70, 70, 70)
+
+# Modern dock + button theme
+UI_TEXT = (240, 240, 240)
+UI_MUTED = (210, 210, 210)
+
+# Button “accents” (subtle, not loud)
+ACCENT_UNLOCK = (70, 185, 120)
+ACCENT_JigSaw = (170, 170, 170)
+ACCENT_ADMIN = (120, 200, 255)
+
+# Sounds (optional wav files in ./sounds/)
 SND_PICK = "pick.wav"
 SND_DROP = "drop.wav"
 SND_SNAP = "snap.wav"
 SND_ERROR = "error.wav"
 
-# Branding
-BRAND_TEXT = "Glover SPARCstation"
-BRAND_SUB = "Puzzle Unlock"
+# ---------------- Square puzzle defaults ----------------
+GRID_X = 3
+GRID_Y = 4
 
-ADMIN_PIN = "1193"
+TRAY_H_FRAC = 0.28
+TRAY_MARGIN = 14
 
-# ---- Lock/Attract UI behavior ----
-LOCK_UI_TIMEOUT_S = 12.0      # controls hide after inactivity on lock screen
-LOCK_SHOW_STATUS_BAR = True
-STATUS_BAR_H = 40
+SNAP_DIST = 190
 
-# ---- ATTRACT (lock screen) animation cycle ----
-# Shows full image, breaks into tiles, scrambles, assembles, then switches to a new image.
-ATTR_WHOLE_HOLD_S = 1.20
-ATTR_BREAK_S = 0.55
-ATTR_SCRAMBLE_S = 10.0
-ATTR_ASSEMBLE_S = 1.00
-ATTR_POST_ASSEMBLE_S = 0.60
-ATTR_DRIFT_SPEED_MIN = 90
-ATTR_DRIFT_SPEED_MAX = 210
-
-# FULL-SCREEN attract grid (includes old tray area)
-ATTR_GRID_X = GRID_X
-ATTR_GRID_Y = GRID_Y + 1
-
-# ---- Square puzzle start animation ----
-PUZ_INTRO_HOLD_S = 0.70       # show full image before breaking
-PUZ_FALL_S = 0.90             # tiles fall into tray
-
-# ---- Random break FX (square + jigsaw + attract) ----
-BREAK_PROB_CRACK = 0.70
-BREAK_PROB_SHAKE = 0.70
-BREAK_PROB_SOUND = 0.65
-
-BREAK_SHAKE_DUR_S_MIN = 0.18
-BREAK_SHAKE_DUR_S_MAX = 0.40
-BREAK_SHAKE_AMP_MIN = 5
-BREAK_SHAKE_AMP_MAX = 12
-
-CRACK_LINES_MIN = 12
-CRACK_LINES_MAX = 24
-CRACK_ALPHA = 135            # baseline alpha; fade handled separately
-CRACK_FADE_S = 0.70
-
-# ---- Unlock success (square puzzle) ----
+PUZ_INTRO_HOLD_S = 0.55
+PUZ_FALL_S = 0.85
 UNLOCK_SUCCESS_S = 0.85
 
-# ---------------- JIGSAW MODE CONFIG ----------------
+# ---------------- Jigsaw puzzle defaults ----------------
 JIG_KNOB_FRAC = 0.22
 JIG_EDGE_OFF_FRAC = 0.18
 
-# Jigsaw snapping: compute per-grid from cell size, with clamps (prevents tiny-piece modes from feeling “magnetic”)
-JIG_SNAP_FRAC = 0.55   # snap distance = JIG_SNAP_FRAC * min(cell_w, cell_h)
+JIG_SNAP_FRAC = 0.55
 JIG_SNAP_MIN = 40
 JIG_SNAP_MAX = 140
 
-JIG_INTRO_HOLD_S = 0.65       # show full image before fall
-JIG_FALL_S = 0.90
+JIG_INTRO_HOLD_S = 0.55
+JIG_FALL_S = 0.85
 JIG_SOLVED_HOLD_S = 0.85
-JIG_BG_DIM_ALPHA = 140        # 0 = blank background in play, else dim image by overlay alpha
-# ----------------------------------------------------
+
+JIG_BG_DIM_ALPHA = 130
 
 JIG_DIFFICULTY_CHOICES = [
     ("Easy",    3, 2),
     ("Normal",  4, 3),
     ("Hard",    5, 4),
     ("Expert",  6, 4),
-    ("Insane", 10, 5),   # 50 pieces: 128×115 cells on a 1280×576 board
-    ("Extreme",12, 5),   # 60 pieces: 106×115 cells (hard, still workable)
+    ("Insane", 10, 5),
+    ("Extreme", 12, 5),
 ]
 
-# ---------------- UI COLORS ----------------
-COLOR_BG = (0, 0, 0)
-COLOR_TRAY = (18, 18, 18)
-COLOR_LINE = (70, 70, 70)
-COLOR_TEXT = (255, 255, 255)
+# Puzzle board scaling:
+#   "cover" keeps play area filled
+#   "contain" shows full photo but may introduce bars in puzzle
+PUZZLE_BOARD_SCALE_MODE = "cover"
 
-COLOR_START = (0, 160, 90)
-COLOR_PI = (197, 29, 52)
-COLOR_SOLARIS = (102, 190, 255)
-COLOR_JIGSAW = (120, 120, 120)
-COLOR_HOME = (120, 120, 120)
-COLOR_CANCEL = (120, 120, 120)
-# -------------------------------------------
+# ============================================================
+# Helpers / utilities
+# ============================================================
+def clamp255(v: float) -> int:
+    return max(0, min(255, int(v)))
 
+def lighten(color, amt=22):
+    return (clamp255(color[0] + amt), clamp255(color[1] + amt), clamp255(color[2] + amt))
 
-def now_ms() -> int:
-    return int(time.time() * 1000)
+def mix(a, b, t: float):
+    t = max(0.0, min(1.0, t))
+    return (int(a[0] + (b[0] - a[0]) * t),
+            int(a[1] + (b[1] - a[1]) * t),
+            int(a[2] + (b[2] - a[2]) * t))
 
+def _ease_in_quad(t: float) -> float:
+    return t * t
 
-def qemu_is_running() -> bool:
-    try:
-        with open(QEMU_PIDFILE, "r") as f:
-            pid_str = f.read().strip()
-        if not pid_str:
-            return False
-        pid = int(pid_str)
-        os.kill(pid, 0)
-        return True
-    except FileNotFoundError:
-        return False
-    except ProcessLookupError:
-        try:
-            os.remove(QEMU_PIDFILE)
-        except OSError:
-            pass
-        return False
-    except Exception:
-        return False
+def _ease_out_cubic(t: float) -> float:
+    u = 1.0 - t
+    return 1.0 - (u * u * u)
 
+def dist2(a, b) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    return dx * dx + dy * dy
 
-def ensure_qemu_running():
-    if qemu_is_running():
-        return
-    try:
-        subprocess.Popen(
-            RUN_QEMU_CMD,
-            cwd="/home/pi/sparc_vm",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        time.sleep(1.0)
-    except Exception:
-        pass
-
-
-# ---------- Pygame init ----------
-pygame.init()
-try:
-    pygame.mixer.init()
-except Exception:
-    pass
-
-screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-pygame.display.set_caption("SPARC Lock")
-clock = pygame.time.Clock()
-W, H = screen.get_size()
-
-pygame.mouse.set_visible(True)
-
-font = pygame.font.SysFont(None, 52)
-font_small = pygame.font.SysFont(None, 26)
-font_brand = pygame.font.SysFont(None, 64)
-font_brand2 = pygame.font.SysFont(None, 28)
-
-
-# ---------- Sounds ----------
-def load_sound(name):
+def load_sound(name: str):
     path = os.path.join(SOUNDS_DIR, name)
     if os.path.exists(path):
         try:
@@ -219,13 +176,6 @@ def load_sound(name):
             return None
     return None
 
-
-snd_pick = load_sound(SND_PICK)
-snd_drop = load_sound(SND_DROP)
-snd_snap = load_sound(SND_SNAP)
-snd_error = load_sound(SND_ERROR)
-
-
 def play(snd):
     if snd:
         try:
@@ -233,26 +183,37 @@ def play(snd):
         except Exception:
             pass
 
+def event_pos(ev, W: int, H: int):
+    if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+        return ev.pos
+    if ev.type in (pygame.FINGERDOWN, pygame.FINGERUP, pygame.FINGERMOTION):
+        return (int(ev.x * W), int(ev.y * H))
+    return None
 
-# ---------- Regions ----------
-TRAY_H = int(H * TRAY_H_FRAC)
-BOARD_H = H - TRAY_H
+def safe_load_image(path: str) -> pygame.Surface:
+    """
+    Fix EXIF orientation if Pillow is available; fallback to pygame loader otherwise.
+    """
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+        img = Image.open(path)
+        img = ImageOps.exif_transpose(img)
 
-board_rect = pygame.Rect(0, 0, W, BOARD_H)
-tray_rect = pygame.Rect(0, BOARD_H, W, TRAY_H)
+        if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+            img = img.convert("RGBA")
+            surf = pygame.image.frombuffer(img.tobytes(), img.size, "RGBA").convert_alpha()
+        else:
+            img = img.convert("RGB")
+            surf = pygame.image.frombuffer(img.tobytes(), img.size, "RGB").convert()
+        return surf
+    except Exception:
+        surf = pygame.image.load(path)
+        try:
+            return surf.convert_alpha() if surf.get_alpha() is not None else surf.convert()
+        except Exception:
+            return surf
 
-
-def calc_jig_snap_dist(cols: int, rows: int) -> int:
-    cols = max(1, int(cols))
-    rows = max(1, int(rows))
-    cell_w = W // cols
-    cell_h = BOARD_H // rows
-    base = int(min(cell_w, cell_h) * JIG_SNAP_FRAC)
-    return max(JIG_SNAP_MIN, min(JIG_SNAP_MAX, base))
-
-
-# ---------- High-quality image scaling (cover-crop) ----------
-def scale_cover(src_surf, target_w, target_h):
+def scale_cover(src_surf: pygame.Surface, target_w: int, target_h: int) -> pygame.Surface:
     sw, sh = src_surf.get_size()
     if sw <= 0 or sh <= 0:
         return pygame.Surface((target_w, target_h))
@@ -264,59 +225,187 @@ def scale_cover(src_surf, target_w, target_h):
     y = (nh - target_h) // 2
     return scaled.subsurface(pygame.Rect(x, y, target_w, target_h)).copy()
 
-
-# ---------- Images ----------
-def load_images():
-    imgs = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png"))]
-    if not imgs:
-        print(f"No images found in {IMAGE_DIR}")
-        sys.exit(1)
-    return imgs
-
-
-images = load_images()
-
-
-def pick_image_surfaces():
+def scale_contain(src_surf: pygame.Surface, target_w: int, target_h: int):
     """
-    Returns:
-      lock_surf:  W x H   (full-screen cover-crop)
-      board_surf: W x BOARD_H (top slice of lock_surf so cropping matches exactly)
-      fname
+    Fit entire image within target (no cropping). Returns (scaled_surf, rect_to_blit_centered).
     """
-    fname = random.choice(images)
-    raw = pygame.image.load(os.path.join(IMAGE_DIR, fname)).convert()
-    lock_surf = scale_cover(raw, W, H)
-    board_surf = lock_surf.subsurface(pygame.Rect(0, 0, W, BOARD_H)).copy()
-    return lock_surf, board_surf, fname
+    sw, sh = src_surf.get_size()
+    if sw <= 0 or sh <= 0:
+        blank = pygame.Surface((target_w, target_h))
+        return blank, blank.get_rect()
+    scale = min(target_w / sw, target_h / sh)
+    nw = max(1, int(sw * scale))
+    nh = max(1, int(sh * scale))
+    scaled = pygame.transform.smoothscale(src_surf, (nw, nh))
+    rect = scaled.get_rect(center=(target_w // 2, target_h // 2))
+    return scaled, rect
 
+def blur_surface_once(src: pygame.Surface, downscale: int = 12) -> pygame.Surface:
+    """
+    Cheap blur: downscale then upscale (computed once per image).
+    """
+    downscale = max(2, int(downscale))
+    w, h = src.get_size()
+    dw = max(2, w // downscale)
+    dh = max(2, h // downscale)
+    small = pygame.transform.smoothscale(src, (dw, dh))
+    return pygame.transform.smoothscale(small, (w, h))
 
-# ---------- Tray / Board ----------
-def draw_tray():
-    pygame.draw.rect(screen, COLOR_TRAY, tray_rect)
-    pygame.draw.line(screen, COLOR_LINE, (0, tray_rect.top), (W, tray_rect.top), 2)
-    txt = font_small.render("TRAY", True, (210, 210, 210))
-    screen.blit(txt, (16, tray_rect.top + 10))
+def blur_surface_hq(src: pygame.Surface, radius: int = 10, downscale: int = 2) -> pygame.Surface:
+    """
+    Higher-quality blur computed once per image swap.
+    Uses PIL GaussianBlur if available; falls back to blur_surface_once.
+    """
+    try:
+        from PIL import Image, ImageFilter  # type: ignore
+        w, h = src.get_size()
+        if w <= 2 or h <= 2:
+            return src
 
+        ds = max(1, int(downscale))
+        if ds > 1:
+            sw = max(2, w // ds)
+            sh = max(2, h // ds)
+            src_small = pygame.transform.smoothscale(src, (sw, sh))
+            raw = pygame.image.tostring(src_small, "RGB")
+            im = Image.frombytes("RGB", (sw, sh), raw)
+        else:
+            raw = pygame.image.tostring(src, "RGB")
+            im = Image.frombytes("RGB", (w, h), raw)
 
-def draw_board_frame():
-    pygame.draw.rect(screen, COLOR_LINE, board_rect, 2)
+        im = im.filter(ImageFilter.GaussianBlur(radius=max(0, int(radius))))
 
+        if ds > 1:
+            im = im.resize((w, h), resample=Image.LANCZOS)
 
-# ---------- UI buttons ----------
-def clamp255(v):
-    return max(0, min(255, int(v)))
+        out = pygame.image.frombuffer(im.tobytes(), (w, h), "RGB").convert()
+        return out
+    except Exception:
+        return blur_surface_once(src, LOCK_BG_BLUR_DOWNSCALE)
 
+# ============================================================
+# Modern UI drawing
+# ============================================================
+def _draw_round_rect_alpha(dst, rect: pygame.Rect, rgb, alpha: int, radius: int):
+    alpha = clamp255(alpha)
+    s = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(s, (rgb[0], rgb[1], rgb[2], alpha), pygame.Rect(0, 0, rect.w, rect.h), border_radius=radius)
+    dst.blit(s, rect.topleft)
 
-def lighten(color, amt=22):
-    return (clamp255(color[0] + amt), clamp255(color[1] + amt), clamp255(color[2] + amt))
+def _draw_round_rect_outline_alpha(dst, rect: pygame.Rect, rgb, alpha: int, radius: int, width: int = 2):
+    alpha = clamp255(alpha)
+    s = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(s, (rgb[0], rgb[1], rgb[2], alpha), pygame.Rect(0, 0, rect.w, rect.h), width, border_radius=radius)
+    dst.blit(s, rect.topleft)
 
+def _draw_icon_lock(dst, center, color, alpha=255):
+    cx, cy = center
+    a = clamp255(alpha)
+    col = (color[0], color[1], color[2], a)
+    s = pygame.Surface((40, 40), pygame.SRCALPHA)
+    # shackle
+    pygame.draw.arc(s, col, pygame.Rect(10, 6, 20, 18), math.pi, 0, 3)
+    # body
+    pygame.draw.rect(s, col, pygame.Rect(10, 18, 20, 16), border_radius=5)
+    dst.blit(s, (cx - 20, cy - 20))
 
-def make_button(rect, label, color=(90, 90, 90)):
+def _draw_icon_JigSaw(dst, center, color, alpha=255):
+    cx, cy = center
+    a = clamp255(alpha)
+    col = (color[0], color[1], color[2], a)
+    s = pygame.Surface((40, 40), pygame.SRCALPHA)
+    # stacked frames
+    pygame.draw.rect(s, col, pygame.Rect(10, 10, 18, 14), 2, border_radius=3)
+    pygame.draw.rect(s, col, pygame.Rect(14, 14, 18, 14), 2, border_radius=3)
+    # small “mountain” line
+    pygame.draw.line(s, col, (16, 24), (22, 18), 2)
+    pygame.draw.line(s, col, (22, 18), (30, 26), 2)
+    dst.blit(s, (cx - 20, cy - 20))
+
+def _draw_icon_key(dst, center, color, alpha=255):
+    cx, cy = center
+    a = clamp255(alpha)
+    col = (color[0], color[1], color[2], a)
+    s = pygame.Surface((40, 40), pygame.SRCALPHA)
+    pygame.draw.circle(s, col, (14, 20), 6, 2)
+    pygame.draw.line(s, col, (20, 20), (34, 20), 2)
+    pygame.draw.line(s, col, (28, 20), (28, 26), 2)
+    pygame.draw.line(s, col, (32, 20), (32, 24), 2)
+    dst.blit(s, (cx - 20, cy - 20))
+
+def draw_modern_dock(dst, dock_rect: pygame.Rect, alpha: int):
+    # glassy panel
+    _draw_round_rect_alpha(dst, dock_rect, (0, 0, 0), int(150 * (alpha / 255.0)), radius=22)
+    _draw_round_rect_outline_alpha(dst, dock_rect, (255, 255, 255), int(90 * (alpha / 255.0)), radius=22, width=2)
+
+# def draw_modern_button(dst, rect: pygame.Rect, label: str, font, icon_fn, accent_rgb, active: bool, pressed: bool, alpha: int):
+#     a = clamp255(alpha)
+#     # shadow
+#     shadow_off = 3 if not pressed else 1
+#     _draw_round_rect_alpha(dst, rect.move(0, shadow_off), (0, 0, 0), int(90 * (a / 255.0)), radius=16)
+
+#     # base fill
+#     base = (18, 18, 18)
+#     if active:
+#         base = (26, 26, 26)
+#     if pressed:
+#         base = (12, 12, 12)
+
+#     _draw_round_rect_alpha(dst, rect, base, int(210 * (a / 255.0)), radius=16)
+
+#     # accent strip
+#     strip = pygame.Rect(rect.x + 12, rect.y + rect.h - 10, rect.w - 24, 4)
+#     _draw_round_rect_alpha(dst, strip, accent_rgb, int(200 * (a / 255.0)), radius=4)
+
+#     # outline
+#     _draw_round_rect_outline_alpha(dst, rect, (255, 255, 255), int(95 * (a / 255.0)), radius=16, width=2)
+
+#     # icon + label
+#     icon_center = (rect.x + 26, rect.centery)
+#     icon_fn(dst, icon_center, accent_rgb, alpha=a)
+
+#     txt = font.render(label, True, (240, 240, 240))
+#     dst.blit(txt, (rect.x + 52, rect.centery - txt.get_height() // 2))
+def draw_modern_button(dst, rect: pygame.Rect, label: str, font, icon_fn, accent_rgb,
+                       active: bool, pressed: bool, alpha: int):
+    a = clamp255(alpha)
+
+    # shadow
+    shadow_off = 3 if not pressed else 1
+    _draw_round_rect_alpha(dst, rect.move(0, shadow_off), (0, 0, 0), int(90 * (a / 255.0)), radius=16)
+
+    # base fill
+    base = (18, 18, 18)
+    if active:
+        base = (26, 26, 26)
+    if pressed:
+        base = (12, 12, 12)
+
+    _draw_round_rect_alpha(dst, rect, base, int(210 * (a / 255.0)), radius=16)
+
+    # accent strip
+    strip = pygame.Rect(rect.x + 12, rect.y + rect.h - 10, rect.w - 24, 4)
+    _draw_round_rect_alpha(dst, strip, accent_rgb, int(200 * (a / 255.0)), radius=4)
+
+    # outline
+    _draw_round_rect_outline_alpha(dst, rect, (255, 255, 255), int(95 * (a / 255.0)), radius=16, width=2)
+
+    # icon + label
+    icon_center = (rect.x + 26, rect.centery)
+    icon_fn(dst, icon_center, accent_rgb, alpha=a)
+
+    # --- FIX: fade the label with the same alpha as the dock ---
+    txt = font.render(label, True, (240, 240, 240))
+    txt.set_alpha(a)  # key line: makes text fade with dock
+    dst.blit(txt, (rect.x + 52, rect.centery - txt.get_height() // 2))
+
+# ============================================================
+# PIN overlay
+# ============================================================
+def make_button(rect: pygame.Rect, label: str, color=(90, 90, 90)):
     return {"rect": rect, "label": label, "color": color}
 
-
-def draw_button(btn, active=False, small=False):
+def draw_button(screen, btn, font_main, font_small, active=False, small=False):
     r = btn["rect"]
     base = btn.get("color", (90, 90, 90))
     bg = base if not active else lighten(base, 28)
@@ -324,291 +413,166 @@ def draw_button(btn, active=False, small=False):
     pygame.draw.rect(screen, bg, r, border_radius=16)
     pygame.draw.rect(screen, (230, 230, 230), r, 2, border_radius=16)
 
-    f = font_small if small else font
+    f = font_small if small else font_main
     t = f.render(btn["label"], True, (255, 255, 255))
     screen.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
 
+def pin_overlay_loop(screen, clock, W, H, bg_frame_surf, font, font_small, snd_error) -> bool:
+    pin_input = ""
+    pin_error = ""
+    pin_error_t0 = 0.0
 
-def draw_status_bar():
-    if not LOCK_SHOW_STATUS_BAR:
-        return
-    bar = pygame.Surface((W, STATUS_BAR_H), pygame.SRCALPHA)
-    bar.fill((0, 0, 0, 140))
-    screen.blit(bar, (0, 0))
+    cancel_btn = make_button(pygame.Rect(16, 16, 170, 48), "CANCEL", color=(120, 120, 120))
 
-    now = datetime.datetime.now()
-    txt = now.strftime("%a %b %d   %I:%M %p").lstrip("0")
-    t = font_small.render(txt, True, (230, 230, 230))
-    screen.blit(t, (W - t.get_width() - 16, (STATUS_BAR_H - t.get_height()) // 2))
+    KEYPAD_COLS = 3
+    KEYPAD_ROWS = 4
+    KEYS = ["1", "2", "3",
+            "4", "5", "6",
+            "7", "8", "9",
+            "C", "0", "OK"]
 
-
-# ---------- Square tiles ----------
-def make_tiles(board_surf):
-    tile_w = W // GRID_X
-    tile_h = BOARD_H // GRID_Y
-
-    tiles = []
-    slot_positions = []
-
-    for y in range(GRID_Y):
-        for x in range(GRID_X):
-            slot_positions.append((x * tile_w, y * tile_h))
-
-    for slot_idx, (sx, sy) in enumerate(slot_positions):
-        rect = pygame.Rect(sx, sy, tile_w, tile_h)
-        tile_img = board_surf.subsurface(rect).copy()
-        tiles.append({
-            "image": tile_img,
-            "correct": (sx, sy),
-            "slot": slot_idx,
-            "pos": (sx, sy),
-            "locked": False,
-            "fall_from": (sx, sy),
-            "fall_to": (sx, sy),
-        })
-
-    return tiles, tile_w, tile_h, slot_positions
-
-
-def tray_random_pos(tile_w, tile_h):
-    x0 = TRAY_MARGIN
-    x1 = W - TRAY_MARGIN - tile_w
-    y0 = tray_rect.top + TRAY_MARGIN
-    y1 = tray_rect.bottom - TRAY_MARGIN - tile_h
-    if x1 < x0:
-        x1 = x0
-    if y1 < y0:
-        y1 = y0
-    return (random.randint(x0, x1), random.randint(y0, y1))
-
-
-def tray_random_pos_sized(obj_w, obj_h):
-    x0 = TRAY_MARGIN
-    x1 = W - TRAY_MARGIN - obj_w
-    y0 = tray_rect.top + TRAY_MARGIN
-    y1 = tray_rect.bottom - TRAY_MARGIN - obj_h
-    if x1 < x0:
-        x1 = x0
-    if y1 < y0:
-        y1 = y0
-    return (random.randint(x0, x1), random.randint(y0, y1))
-
-
-def tile_rect(tile, tile_w, tile_h):
-    return pygame.Rect(tile["pos"], (tile_w, tile_h))
-
-
-# ---------- Slot snapping (square puzzle) ----------
-def dist2(a, b):
-    dx = a[0] - b[0]
-    dy = a[1] - b[1]
-    return dx * dx + dy * dy
-
-
-def nearest_slot(tile, slot_positions):
-    px, py = tile["pos"]
-    best = None
-    best_d2 = None
-    for i, (sx, sy) in enumerate(slot_positions):
-        d2 = dist2((px, py), (sx, sy))
-        if best_d2 is None or d2 < best_d2:
-            best = i
-            best_d2 = d2
-    return best, math.sqrt(best_d2) if best_d2 is not None else 1e9
-
-
-def rebuild_slot_occupancy(tiles):
-    occ = {}
-    for t in tiles:
-        if t.get("locked"):
-            occ[t["slot"]] = t
-    return occ
-
-
-def solved_all_locked(tiles):
-    return all(t.get("locked") for t in tiles)
-
-
-def auto_snap_lock_with_swap(drag_tile, slot_positions, occ, tile_w, tile_h):
-    if drag_tile.get("locked"):
+    def submit() -> bool:
+        nonlocal pin_input, pin_error, pin_error_t0
+        if pin_input == ADMIN_PIN:
+            return True
+        pin_error = "Incorrect PIN"
+        pin_error_t0 = time.time()
+        pin_input = ""
+        play(snd_error)
         return False
 
-    nearest, d = nearest_slot(drag_tile, slot_positions)
-    if d > SNAP_DIST:
-        return False
+    while True:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                raise SystemExit
 
-    target_slot = nearest
-    target_pos = slot_positions[target_slot]
+            if ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_ESCAPE:
+                    return False
+                if ev.key == pygame.K_RETURN:
+                    if submit():
+                        return True
+                elif ev.key == pygame.K_BACKSPACE:
+                    pin_input = pin_input[:-1]
+                else:
+                    if ev.unicode.isdigit() and len(pin_input) < PIN_MAX_LEN:
+                        pin_input += ev.unicode
 
-    if target_slot != drag_tile["slot"]:
-        return False
+            if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                pos = event_pos(ev, W, H)
+                if not pos:
+                    continue
 
-    occupant = occ.get(target_slot, None)
-    if occupant and occupant is not drag_tile:
-        occupant["locked"] = False
-        occupant["pos"] = tray_random_pos(tile_w, tile_h)
+                if cancel_btn["rect"].collidepoint(pos):
+                    return False
 
-    drag_tile["pos"] = target_pos
-    drag_tile["locked"] = True
-    occ[target_slot] = drag_tile
-    return True
+                pad_w = min(520, int(W * 0.42))
+                pad_h = min(520, int(H * 0.62))
+                pad_x = (W - pad_w) // 2
+                pad_y = (H - pad_h) // 2 + 40
+                cell_w = pad_w // KEYPAD_COLS
+                cell_h = pad_h // KEYPAD_ROWS
 
+                idx = 0
+                for r in range(KEYPAD_ROWS):
+                    for c in range(KEYPAD_COLS):
+                        x = pad_x + c * cell_w + 8
+                        y = pad_y + r * cell_h + 8
+                        rect = pygame.Rect(x, y, cell_w - 16, cell_h - 16)
+                        if rect.collidepoint(pos):
+                            key = KEYS[idx]
+                            if key == "C":
+                                pin_input = ""
+                            elif key == "OK":
+                                if submit():
+                                    return True
+                            else:
+                                if len(pin_input) < PIN_MAX_LEN:
+                                    pin_input += key
+                            break
+                        idx += 1
 
-# ---------- Break FX: crack overlay + shake + sound (randomized) ----------
-def make_crack_overlay(w, h, lines=18, seed=None):
-    rnd = random.Random(seed if seed is not None else random.randint(0, 10_000_000))
-    surf = pygame.Surface((w, h), pygame.SRCALPHA)
-    cx = rnd.randint(int(w * 0.35), int(w * 0.65))
-    cy = rnd.randint(int(h * 0.25), int(h * 0.75))
+        # draw
+        screen.blit(bg_frame_surf, (0, 0))
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 205))
+        screen.blit(overlay, (0, 0))
 
-    for _ in range(lines):
-        ang = rnd.uniform(0, math.tau)
-        length = rnd.uniform(w * 0.25, w * 0.80)
-        x = cx
-        y = cy
-        pts = [(x, y)]
-        steps = rnd.randint(6, 13)
-        for i in range(steps):
-            frac = (i + 1) / steps
-            jx = rnd.uniform(-11, 11)
-            jy = rnd.uniform(-11, 11)
-            x = cx + math.cos(ang) * length * frac + jx
-            y = cy + math.sin(ang) * length * frac + jy
-            pts.append((x, y))
+        mx, my = pygame.mouse.get_pos()
+        draw_button(screen, cancel_btn, font, font_small, active=cancel_btn["rect"].collidepoint((mx, my)), small=True)
 
-        pygame.draw.lines(surf, (255, 255, 255, CRACK_ALPHA), False, pts, 2)
-        pygame.draw.lines(surf, (255, 255, 255, max(0, CRACK_ALPHA - 70)), False, pts, 4)
+        title = font.render("PIN UNLOCK", True, (255, 255, 255))
+        prompt = font_small.render("Enter PIN (keyboard or touchscreen keypad):", True, (230, 230, 230))
+        masked = "*" * len(pin_input)
+        entry = font.render(masked, True, (255, 255, 0))
 
-    return surf
+        screen.blit(title, (W // 2 - title.get_width() // 2, 80))
+        screen.blit(prompt, (W // 2 - prompt.get_width() // 2, 130))
+        screen.blit(entry, (W // 2 - entry.get_width() // 2, 165))
 
+        pad_w = min(520, int(W * 0.42))
+        pad_h = min(520, int(H * 0.62))
+        pad_x = (W - pad_w) // 2
+        pad_y = (H - pad_h) // 2 + 40
+        cell_w = pad_w // KEYPAD_COLS
+        cell_h = pad_h // KEYPAD_ROWS
 
-def start_break_fx(w, h):
-    """
-    Dimension-aware break FX:
-      - square/jigsaw use (W, BOARD_H)
-      - attract uses (W, H)
-    """
-    fx = {
-        "t0": time.time(),
-        "use_crack": (random.random() < BREAK_PROB_CRACK),
-        "use_shake": (random.random() < BREAK_PROB_SHAKE),
-        "use_sound": (random.random() < BREAK_PROB_SOUND),
-        "crack_surf": None,
-        "shake_until": 0.0,
-        "shake_amp": 0,
-    }
+        pygame.draw.rect(screen, (35, 35, 35), pygame.Rect(pad_x, pad_y, pad_w, pad_h), border_radius=12)
 
-    if fx["use_crack"]:
-        fx["crack_surf"] = make_crack_overlay(w, h, lines=random.randint(CRACK_LINES_MIN, CRACK_LINES_MAX))
+        rects = []
+        for r in range(KEYPAD_ROWS):
+            for c in range(KEYPAD_COLS):
+                x = pad_x + c * cell_w + 8
+                y = pad_y + r * cell_h + 8
+                rects.append(pygame.Rect(x, y, cell_w - 16, cell_h - 16))
 
-    if fx["use_shake"]:
-        dur = random.uniform(BREAK_SHAKE_DUR_S_MIN, BREAK_SHAKE_DUR_S_MAX)
-        fx["shake_until"] = fx["t0"] + dur
-        fx["shake_amp"] = random.randint(BREAK_SHAKE_AMP_MIN, BREAK_SHAKE_AMP_MAX)
+        for i, r in enumerate(rects):
+            pygame.draw.rect(screen, (70, 70, 70), r, border_radius=10)
+            label = font.render(KEYS[i], True, (255, 255, 255))
+            screen.blit(label, (r.centerx - label.get_width() // 2, r.centery - label.get_height() // 2))
 
-    if fx["use_sound"]:
-        choices = []
-        if snd_snap:
-            choices.append(snd_snap)
-        if snd_drop:
-            choices.append(snd_drop)
-        if snd_pick:
-            choices.append(snd_pick)
-        if choices:
-            play(random.choice(choices))
+        if pin_error and (time.time() - pin_error_t0) < 2.0:
+            err = font_small.render(pin_error, True, (255, 90, 90))
+            screen.blit(err, (W // 2 - err.get_width() // 2, pad_y + pad_h + 18))
 
-    return fx
+        tip = font_small.render("Enter/OK=submit, Backspace=delete, Esc/CANCEL=back.", True, (230, 230, 230))
+        screen.blit(tip, (W // 2 - tip.get_width() // 2, pad_y + pad_h + 50))
 
+        pygame.display.flip()
+        clock.tick(60)
 
-def break_shake_offset(fx):
-    if not fx or not fx.get("use_shake"):
-        return 0, 0
-    if time.time() > fx.get("shake_until", 0.0):
-        return 0, 0
-    amp = fx.get("shake_amp", 0)
-    return random.randint(-amp, amp), random.randint(-amp, amp)
+# ============================================================
+# Unlock success overlay
+# ============================================================
+def unlock_success_overlay(screen, clock, W, H, font_brand, font_small, snd_snap,
+                          msg="UNLOCKED", sub="Returning to menu...", hold_s=UNLOCK_SUCCESS_S):
+    t0 = time.time()
+    play(snd_snap)
+    while time.time() - t0 < hold_s:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                raise SystemExit
+        screen.fill(COLOR_BG)
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        screen.blit(overlay, (0, 0))
+        m = font_brand.render(msg, True, (255, 255, 255))
+        s = font_small.render(sub, True, (230, 230, 230))
+        screen.blit(m, (W // 2 - m.get_width() // 2, H // 2 - 40))
+        screen.blit(s, (W // 2 - s.get_width() // 2, H // 2 + 20))
+        pygame.display.flip()
+        clock.tick(60)
 
-
-def draw_crack_overlay_fade(fx):
-    """
-    Draw crack overlay (whatever size the crack surface is) at (0,0) with fade-out.
-    """
-    if not fx or not fx.get("use_crack") or not fx.get("crack_surf"):
-        return
-    elapsed = time.time() - fx.get("t0", time.time())
-    fade = 1.0 - min(1.0, elapsed / max(0.001, CRACK_FADE_S))
-    if fade <= 0:
-        return
-    crack = fx["crack_surf"].copy()
-    crack.set_alpha(int(255 * fade))
-    screen.blit(crack, (0, 0))
-
-
-# ---------- ATTRACT animation helpers ----------
-def lerp(a, b, t):
-    return a + (b - a) * t
-
-
-def lerp_pos(p0, p1, t):
-    return (int(lerp(p0[0], p1[0], t)), int(lerp(p0[1], p1[1], t)))
-
-
-def set_random_vel(tile):
-    vx = random.uniform(ATTR_DRIFT_SPEED_MIN, ATTR_DRIFT_SPEED_MAX) * random.choice([-1, 1])
-    vy = random.uniform(ATTR_DRIFT_SPEED_MIN, ATTR_DRIFT_SPEED_MAX) * random.choice([-1, 1])
-    tile["vel"] = (vx, vy)
-
-
-def make_tiles_fullscreen(full_surf, cols, rows):
-    """
-    Tiles that cover the entire screen W x H (includes the old tray area).
-    Last row/col expand to absorb remainder pixels so there are no un-tiled strips.
-    """
-    tile_w_base = W // cols
-    tile_h_base = H // rows
-
-    tiles = []
-    for y in range(rows):
-        for x in range(cols):
-            sx = x * tile_w_base
-            sy = y * tile_h_base
-            tw = tile_w_base if x < cols - 1 else (W - sx)
-            th = tile_h_base if y < rows - 1 else (H - sy)
-
-            rect = pygame.Rect(sx, sy, tw, th)
-            img = full_surf.subsurface(rect).copy()
-            tiles.append({
-                "image": img,
-                "correct": (sx, sy),
-                "pos": (sx, sy),
-                "w": tw,
-                "h": th,
-                "vel": (0.0, 0.0),
-            })
-    return tiles
-
-
-def scatter_pos_full(tw, th):
-    x0 = TRAY_MARGIN
-    x1 = W - TRAY_MARGIN - tw
-    y0 = TRAY_MARGIN
-    y1 = H - TRAY_MARGIN - th
-    if x1 < x0:
-        x1 = x0
-    if y1 < y0:
-        y1 = y0
-    return (random.randint(x0, x1), random.randint(y0, y1))
-
-
-# ---------- JIGSAW helpers ----------
-def _ease_in_quad(t):
-    return t * t
-
-
-def _ease_out_cubic(t):
-    u = 1.0 - t
-    return 1.0 - (u * u * u)
-
+# ============================================================
+# Jigsaw internals
+# ============================================================
+def calc_jig_snap_dist(W: int, BOARD_H: int, cols: int, rows: int) -> int:
+    cols = max(1, int(cols))
+    rows = max(1, int(rows))
+    cell_w = W // cols
+    cell_h = BOARD_H // rows
+    base = int(min(cell_w, cell_h) * JIG_SNAP_FRAC)
+    return max(JIG_SNAP_MIN, min(JIG_SNAP_MAX, base))
 
 def _make_jigsaw_edges(cols, rows):
     h_edges = [
@@ -623,7 +587,6 @@ def _make_jigsaw_edges(cols, rows):
     ]
     return h_edges, v_edges
 
-
 def _apply_edge_circle(mask_surf, kind, center, radius):
     if kind == 0:
         return
@@ -632,9 +595,7 @@ def _apply_edge_circle(mask_surf, kind, center, radius):
     else:
         pygame.draw.circle(mask_surf, (255, 255, 255, 0), center, radius)
 
-
-def build_jigsaw_pieces(board_surf, cols, rows):
-    # NOTE: Keep uniform cell sizes for consistent edge matching across pieces.
+def build_jigsaw_pieces(W, BOARD_H, board_surf, cols, rows):
     cell_w = W // cols
     cell_h = BOARD_H // rows
 
@@ -698,7 +659,6 @@ def build_jigsaw_pieces(board_surf, cols, rows):
             piece_surf.blit(mask_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
 
             piece_mask = pygame.mask.from_surface(mask_surf)
-
             correct_pos = (x * cell_w - margin, y * cell_h - margin)
 
             pieces.append({
@@ -713,937 +673,1098 @@ def build_jigsaw_pieces(board_surf, cols, rows):
 
     return pieces
 
+def tray_random_pos_sized(W, tray_rect, obj_w, obj_h):
+    x0 = TRAY_MARGIN
+    x1 = W - TRAY_MARGIN - obj_w
+    y0 = tray_rect.top + TRAY_MARGIN
+    y1 = tray_rect.bottom - TRAY_MARGIN - obj_h
+    if x1 < x0:
+        x1 = x0
+    if y1 < y0:
+        y1 = y0
+    return (random.randint(x0, x1), random.randint(y0, y1))
 
 def jigsaw_all_locked(pieces):
     return all(p.get("locked") for p in pieces)
 
-
-# ---------- VM ----------
-def enter_vm_mode():
-    ensure_qemu_running()
-    if not qemu_is_running():
-        return
-    try:
-        os.execv(LAUNCH_SOLARIS_SH, [LAUNCH_SOLARIS_SH])
-    except Exception:
-        return
-
-
-def open_pi_desktop():
-    try:
-        pygame.quit()
-    except Exception:
-        pass
-    sys.exit(ADMIN_DESKTOP_EXIT_CODE)
-
-
-# ---------- Lock UI visibility ----------
-lock_ui_visible = False
-lock_ui_until = 0.0
-
-
-def wake_lock_ui():
-    global lock_ui_visible, lock_ui_until
-    lock_ui_visible = True
-    lock_ui_until = time.time() + LOCK_UI_TIMEOUT_S
-
-
-def update_lock_ui_timeout():
-    global lock_ui_visible
-    if lock_ui_visible and time.time() > lock_ui_until:
-        lock_ui_visible = False
-
-
-# ---------- PIN overlay ----------
-STATE_ATTRACT = "ATTRACT"
-STATE_PUZZLE = "PUZZLE"
-STATE_PIN = "PIN"
-STATE_JIG_SELECT = "JIG_SELECT"
-STATE_JIGSAW = "JIGSAW"
-
-PIN_ACTION_SOLARIS = "SOLARIS"
-PIN_ACTION_PI = "PI"
-
-pin_action = PIN_ACTION_SOLARIS
-pin_return_state = STATE_ATTRACT
-pin_input = ""
-pin_error = ""
-pin_error_t0 = 0.0
-
-
-def open_pin_prompt(action, return_state=STATE_ATTRACT):
-    global pin_action, pin_return_state, pin_input, pin_error
-    global state
-    state = STATE_PIN
-    pin_action = action
-    pin_return_state = return_state
-    pin_input = ""
-    pin_error = ""
-
-
-def close_pin_prompt():
-    global state, pin_input, pin_error
-    pin_input = ""
-    pin_error = ""
-    state = pin_return_state
-
-
-def pin_submit():
-    global pin_input, pin_error, pin_error_t0
-    if pin_input == ADMIN_PIN:
-        if pin_action == PIN_ACTION_SOLARIS:
-            enter_vm_mode()
-        elif pin_action == PIN_ACTION_PI:
-            open_pi_desktop()
-    else:
-        pin_error = "Incorrect PIN"
-        pin_error_t0 = time.time()
-        pin_input = ""
-        play(snd_error)
-
-
-# ---------- Unlock success (square puzzle) ----------
-def unlock_success_and_enter_vm():
-    """
-    Brief 'UNLOCKED' overlay, then hand off to Solaris viewer via enter_vm_mode().
-
-    Per your request:
-      - Do NOT show the full image again here (no lock_surf/board_surf background).
-    """
-    t0 = time.time()
-    play(snd_snap)
-
-    while True:
-        elapsed = time.time() - t0
-        if elapsed >= UNLOCK_SUCCESS_S:
-            break
-
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
-                raise SystemExit
-
-        screen.fill(COLOR_BG)
-
-        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        screen.blit(overlay, (0, 0))
-
-        pulse = 0.55 + 0.45 * math.sin(elapsed * 10.0)
-        col = (255, 255, int(180 + 60 * pulse))
-        msg = font_brand.render("UNLOCKED", True, col)
-        sub = font_small.render("Launching Solaris...", True, (230, 230, 230))
-
-        screen.blit(msg, (W // 2 - msg.get_width() // 2, H // 2 - msg.get_height() // 2 - 18))
-        screen.blit(sub, (W // 2 - sub.get_width() // 2, H // 2 + 28))
-
-        pygame.display.flip()
-        clock.tick(60)
-
-    enter_vm_mode()
-
-
-# ---------- Lock image surfaces ----------
-lock_surf, board_surf, img_name = pick_image_surfaces()
-
-
-def _load_lock_image_by_name(fname):
-    global lock_surf, board_surf, img_name
-    raw = pygame.image.load(os.path.join(IMAGE_DIR, fname)).convert()
-    lock_surf = scale_cover(raw, W, H)
-    board_surf = lock_surf.subsurface(pygame.Rect(0, 0, W, BOARD_H)).copy()
-    img_name = fname
-
-
-def pick_new_lock_image():
-    global lock_surf, board_surf, img_name
-    lock_surf, board_surf, img_name = pick_image_surfaces()
-
-
-# ---------- Square puzzle runtime ----------
-PUZ_STAGE_INTRO = "INTRO"
-PUZ_STAGE_FALL = "FALL"
-PUZ_STAGE_PLAY = "PLAY"
-
-tiles, tile_w, tile_h, slot_positions = make_tiles(board_surf)
-drag_tile = None
-drag_ox = drag_oy = 0
-puz_stage = PUZ_STAGE_INTRO
-puz_t0 = 0.0
-puz_break_fx = None
-
-# ---------- Jigsaw runtime ----------
-JIG_STAGE_INTRO = "INTRO"
-JIG_STAGE_FALL = "FALL"
-JIG_STAGE_PLAY = "PLAY"
-JIG_STAGE_SOLVED = "SOLVED"
-
-jig_stage = JIG_STAGE_INTRO
-jig_t0 = 0.0
-jig_order = []
-jig_index = 0
-jig_cols = JIG_DIFFICULTY_CHOICES[1][1]
-jig_rows = JIG_DIFFICULTY_CHOICES[1][2]
-jig_snap_dist = calc_jig_snap_dist(jig_cols, jig_rows)  # NEW: per-grid snap dist
-jig_pieces = []
-jig_drag_piece = None
-jig_drag_ox = jig_drag_oy = 0
-jig_break_fx = None
-
-
-def _ensure_jig_order():
-    global jig_order, jig_index
-    if not jig_order:
-        jig_order = images[:]
-        random.shuffle(jig_order)
-        jig_index = 0
-
-
-def _load_jigsaw_current_image():
-    global jig_pieces, jig_stage, jig_t0, jig_drag_piece, jig_break_fx
-    global jig_snap_dist
-    jig_snap_dist = calc_jig_snap_dist(jig_cols, jig_rows)
-
-    jig_pieces = build_jigsaw_pieces(board_surf, jig_cols, jig_rows)
-
-    random.shuffle(jig_pieces)
-    for p in jig_pieces:
-        p["locked"] = False
-        p["pos"] = p["correct_pos"]
-        p["fall_from"] = p["correct_pos"]
-        p["fall_to"] = tray_random_pos_sized(p["surf"].get_width(), p["surf"].get_height())
-
-    jig_drag_piece = None
-    jig_stage = JIG_STAGE_INTRO
-    jig_break_fx = None
-    jig_t0 = time.time()
-
-
-def advance_jigsaw_image():
-    global jig_index
-    _ensure_jig_order()
-    jig_index = (jig_index + 1) % len(jig_order)
-    _load_lock_image_by_name(jig_order[jig_index])
-    _load_jigsaw_current_image()
-
-
-# ---------- Buttons ----------
-start_btn = make_button(
-    pygame.Rect(W // 2 - 160, int(H * 0.66), 320, 96),
-    "START",
-    color=COLOR_START
-)
-
-pi_btn = make_button(
-    pygame.Rect(16, H - 76, 180, 56),
-    "PI MODE",
-    color=COLOR_PI
-)
-
-jigsaw_btn = make_button(
-    pygame.Rect(W // 2 - 140, H - 76, 280, 56),
-    "JIGSAW MODE",
-    color=COLOR_JIGSAW
-)
-
-solaris_btn = make_button(
-    pygame.Rect(W - 16 - 220, H - 76, 220, 56),
-    "SOLARIS MODE",
-    color=COLOR_SOLARIS
-)
-
-home_btn = make_button(
-    pygame.Rect(16, 16, 160, 48),
-    "HOME",
-    color=COLOR_HOME
-)
-
-pin_cancel_btn = make_button(
-    pygame.Rect(16, 16, 170, 48),
-    "CANCEL",
-    color=COLOR_CANCEL
-)
-
-jig_select_back_btn = make_button(
-    pygame.Rect(16, 16, 160, 48),
-    "BACK",
-    color=COLOR_HOME
-)
-
-
-# ---------- ATTRACT animation runtime ----------
-ATTR_STAGE_WHOLE = "WHOLE"
-ATTR_STAGE_BREAK = "BREAK"
-ATTR_STAGE_SCRAMBLE = "SCRAMBLE"
-ATTR_STAGE_ASSEMBLE = "ASSEMBLE"
-ATTR_STAGE_HOLD = "HOLD"
-
-attr_stage = ATTR_STAGE_WHOLE
-attr_t0 = time.time()
-attr_tiles = []
-attr_scatter_targets = []
-attr_assemble_from = []
-attr_break_fx = None
-
-
-def start_new_attract_cycle():
-    """
-    FULL-SCREEN break/scramble/assemble (includes old tray area).
-    """
-    global attr_stage, attr_t0, attr_tiles
-    global attr_scatter_targets, attr_assemble_from, attr_break_fx
-
-    pick_new_lock_image()
-
-    attr_tiles = make_tiles_fullscreen(lock_surf, ATTR_GRID_X, ATTR_GRID_Y)
-    for t in attr_tiles:
-        t["pos"] = t["correct"]
-        set_random_vel(t)
-
-    attr_scatter_targets = [scatter_pos_full(t["w"], t["h"]) for t in attr_tiles]
-    attr_assemble_from = []
-    attr_break_fx = None
-
-    attr_stage = ATTR_STAGE_WHOLE
-    attr_t0 = time.time()
-
-
-# ---------- Mode transitions ----------
-state = STATE_ATTRACT
-
-
-def back_to_lock():
-    global state, drag_tile, jig_drag_piece, lock_ui_visible
-    global puz_break_fx, jig_break_fx
-    state = STATE_ATTRACT
-    drag_tile = None
-    jig_drag_piece = None
-    puz_break_fx = None
-    jig_break_fx = None
-    lock_ui_visible = False
-    start_new_attract_cycle()
-
-
-def enter_square_puzzle():
-    global state, tiles, tile_w, tile_h, slot_positions
-    global drag_tile, puz_stage, puz_t0, puz_break_fx
-
-    tiles, tile_w, tile_h, slot_positions = make_tiles(board_surf)
-    drag_tile = None
-
-    for t in tiles:
-        t["locked"] = False
-        t["pos"] = t["correct"]
-        t["fall_from"] = t["correct"]
-        t["fall_to"] = tray_random_pos(tile_w, tile_h)
-
-    puz_stage = PUZ_STAGE_INTRO
-    puz_break_fx = None
-    puz_t0 = time.time()
-    state = STATE_PUZZLE
-
-
-def rescramble_square_puzzle():
-    for t in tiles:
-        if not t.get("locked"):
-            t["pos"] = tray_random_pos(tile_w, tile_h)
-
-
-def enter_jigsaw_select():
-    global state
-    state = STATE_JIG_SELECT
-
-
-def enter_jigsaw_mode(cols, rows):
-    global state, jig_cols, jig_rows, jig_index, jig_snap_dist
-    jig_cols, jig_rows = cols, rows
-    jig_snap_dist = calc_jig_snap_dist(cols, rows)  # NEW: compute per-grid snap
-    _ensure_jig_order()
-    _load_lock_image_by_name(jig_order[jig_index])
-    _load_jigsaw_current_image()
-    state = STATE_JIGSAW
-
-
-# Start VM early so it is already booting behind the lock screen
-ensure_qemu_running()
-
-# Start attract cycle immediately
-start_new_attract_cycle()
-
-# ---------- Main loop ----------
-running = True
-try:
-    while running:
-        dt = clock.tick(60) / 1000.0
-
-        # -------- Handle events --------
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                running = False
-
-            # Global: ESC backs out of modes, quits only from lock screen
-            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
-                if state == STATE_ATTRACT:
-                    running = False
-                elif state == STATE_PIN:
-                    close_pin_prompt()
-                else:
-                    back_to_lock()
-                continue
-
-            # Lock UI wake behavior (ATTRACT only):
-            if state == STATE_ATTRACT and not lock_ui_visible:
-                if e.type in (pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN):
-                    wake_lock_ui()
+# ============================================================
+# App
+# ============================================================
+class LockApp:
+    STATE_LOCK = "LOCK"
+    STATE_SQUARE = "SQUARE"
+    STATE_JIG_SELECT = "JIG_SELECT"
+    STATE_JIGSAW = "JIGSAW"
+
+    PUZ_INTRO = "INTRO"
+    PUZ_FALL = "FALL"
+    PUZ_PLAY = "PLAY"
+
+    JIG_INTRO = "INTRO"
+    JIG_FALL = "FALL"
+    JIG_PLAY = "PLAY"
+    JIG_SOLVED = "SOLVED"
+
+    LOCK_TRANS_NONE = None
+    LOCK_TRANS_BREAK = "BREAK"
+    LOCK_TRANS_FADEIN = "FADEIN"
+
+    def __init__(self):
+        pygame.init()
+        try:
+            pygame.mixer.init()
+        except Exception:
+            pass
+
+        # Request vsync for smoother motion when supported.
+        try:
+            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN, vsync=1)
+        except Exception:
+            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+
+        pygame.display.set_caption("SPARC Lock")
+        self.clock = pygame.time.Clock()
+        self.W, self.H = self.screen.get_size()
+        pygame.mouse.set_visible(True)
+
+        self.font = pygame.font.SysFont(None, 52)
+        self.font_small = pygame.font.SysFont(None, 26)
+        self.font_brand = pygame.font.SysFont(None, 64)
+        self.font_brand2 = pygame.font.SysFont(None, 28)
+
+        # Dock text slightly smaller than prior big buttons
+        self.font_dock = pygame.font.SysFont(None, 28)
+
+        self.snd_pick = load_sound(SND_PICK)
+        self.snd_drop = load_sound(SND_DROP)
+        self.snd_snap = load_sound(SND_SNAP)
+        self.snd_error = load_sound(SND_ERROR)
+
+        self.TRAY_H = int(self.H * TRAY_H_FRAC)
+        self.BOARD_H = self.H - self.TRAY_H
+        self.board_rect = pygame.Rect(0, 0, self.W, self.BOARD_H)
+        self.tray_rect = pygame.Rect(0, self.BOARD_H, self.W, self.TRAY_H)
+
+        self.images = self._load_images()
+        self.playlist = list(self.images)
+        if LOCK_BG_SHUFFLE:
+            random.shuffle(self.playlist)
+        else:
+            self.playlist.sort()
+        self.lock_idx = random.randrange(len(self.playlist)) if LOCK_BG_RANDOM_START else 0
+
+        # Lock surfaces
+        self.lock_bg_big = None
+        self.lock_fg = None
+        self.lock_fg_rect = None
+        self.board_surf = None
+        self.img_name = ""
+
+        # Pan state (float)
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.pan_vx = 0.0
+        self.pan_vy = 0.0
+
+        # slideshow cycle + transitions
+        self.lock_cycle_t0 = time.time()
+        self.lock_trans = self.LOCK_TRANS_NONE
+        self.lock_trans_t0 = 0.0
+
+        self.break_style = "shatter"
+        self.break_dur = float(LOCK_BREAK_DURATIONS.get("shatter", 0.85))
+
+        self.lock_snapshot = pygame.Surface((self.W, self.H))
+        self.break_pieces = []
+
+        self._set_image_by_index(self.lock_idx)
+
+        # Lock UI visibility
+        now = time.time()
+        self.lock_ui_visible_until = (now + LOCK_UI_AUTOHIDE_S) if not LOCK_UI_START_HIDDEN else 0.0
+        self.last_mouse_pos = pygame.mouse.get_pos()
+
+        # Dock fade alpha
+        self.ui_alpha = 0.0 if LOCK_UI_START_HIDDEN else 255.0
+
+        # Modern dock layout
+        self._layout_lock_dock()
+
+        # Lock press tracking (activate on release)
+        self.lock_pressed = None  # "unlock" | "JigSaw" | "admin"
+
+        # State machine
+        self.state = self.STATE_LOCK
+
+        # Square puzzle runtime
+        self.tiles = []
+        self.tile_w = 0
+        self.tile_h = 0
+        self.slot_positions = []
+        self.drag_tile = None
+        self.drag_ox = 0
+        self.drag_oy = 0
+        self.puz_stage = self.PUZ_INTRO
+        self.puz_t0 = 0.0
+
+        # Jigsaw runtime
+        self.jigsaw_session = False
+        self.jig_cols, self.jig_rows = JIG_DIFFICULTY_CHOICES[1][1], JIG_DIFFICULTY_CHOICES[1][2]
+        self.jig_snap_dist = calc_jig_snap_dist(self.W, self.BOARD_H, self.jig_cols, self.jig_rows)
+        self.jig_pieces = []
+        self.jig_drag_piece = None
+        self.jig_drag_ox = 0
+        self.jig_drag_oy = 0
+        self.jig_stage = self.JIG_INTRO
+        self.jig_t0 = 0.0
+
+        # Back button (keep old style for now; it’s already compact)
+        self.back_btn = make_button(pygame.Rect(16, 16, 160, 48), "BACK", color=(120, 120, 120))
+
+    def _layout_lock_dock(self):
+        # A compact “family kiosk” dock: centered, not oversized.
+        margin_bottom = 28
+        dock_w = min(780, int(self.W * 0.68))
+        dock_h = 96
+        dock_x = (self.W - dock_w) // 2
+        dock_y = self.H - dock_h - margin_bottom
+        self.dock_rect = pygame.Rect(dock_x, dock_y, dock_w, dock_h)
+
+        pad = 14
+        gap = 12
+        btn_h = 64
+        btn_y = dock_y + (dock_h - btn_h) // 2
+        btn_w = (dock_w - pad * 2 - gap * 2) // 3
+
+        self.btn_unlock = pygame.Rect(dock_x + pad + (btn_w + gap) * 0, btn_y, btn_w, btn_h)
+        self.btn_JigSaw = pygame.Rect(dock_x + pad + (btn_w + gap) * 1, btn_y, btn_w, btn_h)
+        self.btn_admin = pygame.Rect(dock_x + pad + (btn_w + gap) * 2, btn_y, btn_w, btn_h)
+
+    def _load_images(self):
+        if not os.path.isdir(IMAGE_DIR):
+            print(f"Missing images dir: {IMAGE_DIR}", file=sys.stderr)
+            sys.exit(1)
+        imgs = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        if not imgs:
+            print(f"No images found in {IMAGE_DIR}", file=sys.stderr)
+            sys.exit(1)
+        return imgs
+
+    def exit_unlocked(self):
+        try:
+            pygame.quit()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    # ---------------- lock UI visibility ----------------
+    def _touch_lock_ui(self):
+        self.lock_ui_visible_until = time.time() + LOCK_UI_AUTOHIDE_S
+
+    def _lock_ui_visible(self) -> bool:
+        return time.time() < self.lock_ui_visible_until
+
+    # ---------------- lock surfaces ----------------
+    def _set_image_by_index(self, idx: int):
+        self.lock_idx = idx % len(self.playlist)
+        fname = self.playlist[self.lock_idx]
+        raw = safe_load_image(os.path.join(IMAGE_DIR, fname))
+        self.img_name = fname
+
+        # 1) Visible photo (full view if contain)
+        if LOCK_VISIBLE_SCALE_MODE.lower() == "cover":
+            self.lock_fg = scale_cover(raw, self.W, self.H)
+            self.lock_fg_rect = self.lock_fg.get_rect(topleft=(0, 0))
+        else:
+            self.lock_fg, self.lock_fg_rect = scale_contain(raw, self.W, self.H)
+
+        # 2) Background: oversized cover + blur + dim, used for smooth pan
+        big_w = self.W + LOCK_BG_PAN_RANGE_PX
+        big_h = self.H + LOCK_BG_PAN_RANGE_PX
+        bg = scale_cover(raw, big_w, big_h).convert()
+
+        if LOCK_BG_BLUR_METHOD.lower() == "hq":
+            bg = blur_surface_hq(bg, radius=LOCK_BG_HQ_RADIUS, downscale=LOCK_BG_HQ_DOWNSCALE)
+        else:
+            bg = blur_surface_once(bg, LOCK_BG_BLUR_DOWNSCALE).convert()
+
+        if LOCK_BG_DIM_ALPHA > 0:
+            dim = pygame.Surface((big_w, big_h), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, clamp255(LOCK_BG_DIM_ALPHA)))
+            bg.blit(dim, (0, 0))
+
+        self.lock_bg_big = bg.convert()
+
+        # 3) Puzzle board: cover by default (so play area is filled)
+        if PUZZLE_BOARD_SCALE_MODE.lower() == "contain":
+            board_fit, rect = scale_contain(raw, self.W, self.BOARD_H)
+            board = pygame.Surface((self.W, self.BOARD_H))
+            board.fill((0, 0, 0))
+            board.blit(board_fit, rect)
+            self.board_surf = board.convert()
+        else:
+            self.board_surf = scale_cover(raw, self.W, self.BOARD_H).convert()
+
+        # Pan state init
+        max_x = max(0, self.lock_bg_big.get_width() - self.W)
+        max_y = max(0, self.lock_bg_big.get_height() - self.H)
+        self.pan_x = float(random.randint(0, max_x)) if max_x else 0.0
+        self.pan_y = float(random.randint(0, max_y)) if max_y else 0.0
+
+        ang = random.uniform(0, math.tau)
+        self.pan_vx = math.cos(ang) * LOCK_BG_PAN_SPEED_PX_S
+        self.pan_vy = math.sin(ang) * LOCK_BG_PAN_SPEED_PX_S
+
+        self.lock_cycle_t0 = time.time()
+
+    def _advance_image(self):
+        nxt = self.lock_idx + 1
+        if nxt >= len(self.playlist):
+            nxt = 0
+            if LOCK_BG_SHUFFLE:
+                random.shuffle(self.playlist)
+        self._set_image_by_index(nxt)
+
+    def _update_pan(self, dt: float):
+        if not self.lock_bg_big:
+            return
+        max_x = max(0, self.lock_bg_big.get_width() - self.W)
+        max_y = max(0, self.lock_bg_big.get_height() - self.H)
+
+        self.pan_x += self.pan_vx * dt
+        self.pan_y += self.pan_vy * dt
+
+        # Bounce
+        if max_x > 0:
+            if self.pan_x < 0:
+                self.pan_x = 0.0
+                self.pan_vx = abs(self.pan_vx)
+            elif self.pan_x > max_x:
+                self.pan_x = float(max_x)
+                self.pan_vx = -abs(self.pan_vx)
+        else:
+            self.pan_x = 0.0
+
+        if max_y > 0:
+            if self.pan_y < 0:
+                self.pan_y = 0.0
+                self.pan_vy = abs(self.pan_vy)
+            elif self.pan_y > max_y:
+                self.pan_y = float(max_y)
+                self.pan_vy = -abs(self.pan_vy)
+        else:
+            self.pan_y = 0.0
+
+    def _draw_lock_frame_to(self, target_surf: pygame.Surface):
+        # Draw panning background crop
+        if self.lock_bg_big:
+            max_x = max(0, self.lock_bg_big.get_width() - self.W)
+            max_y = max(0, self.lock_bg_big.get_height() - self.H)
+            vx = int(max(0, min(max_x, self.pan_x)))
+            vy = int(max(0, min(max_y, self.pan_y)))
+            view = pygame.Rect(vx, vy, self.W, self.H)
+            target_surf.blit(self.lock_bg_big.subsurface(view), (0, 0))
+        else:
+            target_surf.fill((0, 0, 0))
+
+        # Draw visible photo (fit/contain) on top
+        if self.lock_fg and self.lock_fg_rect:
+            target_surf.blit(self.lock_fg, self.lock_fg_rect)
+
+    def _build_lock_frame_surface(self) -> pygame.Surface:
+        surf = pygame.Surface((self.W, self.H))
+        self._draw_lock_frame_to(surf)
+        return surf
+
+    # ---------------- status bar ----------------
+    def _draw_status_bar(self):
+        if not SHOW_STATUS_BAR:
+            return
+        bar = pygame.Surface((self.W, STATUS_BAR_H), pygame.SRCALPHA)
+        bar.fill((0, 0, 0, 140))
+        self.screen.blit(bar, (0, 0))
+
+        now = datetime.datetime.now()
+        txt = now.strftime("%a %b %d   %I:%M %p").lstrip("0")
+        t = self.font_small.render(txt, True, (230, 230, 230))
+        self.screen.blit(t, (self.W - t.get_width() - 16, (STATUS_BAR_H - t.get_height()) // 2))
+
+    # ---------------- lock transitions ----------------
+    def _snapshot_current_lock_view(self):
+        self._draw_lock_frame_to(self.lock_snapshot)
+
+    def _choose_break_style(self) -> str:
+        mode = (LOCK_TRANSITION_STYLE or "random").lower().strip()
+        styles = LOCK_TRANSITION_STYLES or ["shatter"]
+        if mode == "random":
+            return random.choice(styles)
+        if mode in styles:
+            return mode
+        return "shatter"
+
+    def _build_break_pieces(self, style: str):
+        self.break_pieces = []
+        style = (style or "shatter").lower()
+        W, H = self.W, self.H
+        snap = self.lock_snapshot
+
+        if style == "blinds":
+            strip_w = max(60, W // 14)
+            i = 0
+            for x in range(0, W, strip_w):
+                w = min(strip_w, W - x)
+                rect = pygame.Rect(x, 0, w, H)
+                surf = snap.subsurface(rect).copy()
+
+                delay = i * 0.03
+                vy = random.uniform(650, 1050)
+                vx = random.uniform(-40, 40)
+
+                self.break_pieces.append({
+                    "surf": surf,
+                    "x": float(x),
+                    "y": 0.0,
+                    "vx": vx,
+                    "vy": vy,
+                    "ax": 0.0,
+                    "ay": 900.0,
+                    "delay": delay,
+                })
+                i += 1
+            return
+
+        # Tile-based effects
+        if style == "explode":
+            tile = max(120, min(220, int(min(W, H) * 0.12)))
+        elif style == "drop":
+            tile = max(110, min(200, int(min(W, H) * 0.11)))
+        else:
+            tile = max(90, min(190, LOCK_SHATTER_TILE_TARGET))
+
+        cx0, cy0 = W * 0.5, H * 0.5
+
+        for y in range(0, H, tile):
+            for x in range(0, W, tile):
+                w = min(tile, W - x)
+                h = min(tile, H - y)
+                rect = pygame.Rect(x, y, w, h)
+                surf = snap.subsurface(rect).copy()
+
+                pcx = x + w * 0.5
+                pcy = y + h * 0.5
+                dx = pcx - cx0
+                dy = pcy - cy0
+                mag = math.hypot(dx, dy) or 1.0
+                nx, ny = dx / mag, dy / mag
+
+                if style == "explode":
+                    speed = random.uniform(520, 980)
+                    vx = nx * speed + random.uniform(-120, 120)
+                    vy = ny * speed + random.uniform(-120, 120)
+                    ax, ay = 0.0, 0.0
+                    delay = random.uniform(0.0, 0.05)
+                elif style == "drop":
+                    vx = random.uniform(-120, 120)
+                    vy = random.uniform(-40, 180)
+                    ax, ay = 0.0, 1400.0
+                    delay = random.uniform(0.0, 0.12)
+                else:  # shatter
+                    vx = random.uniform(-240, 240)
+                    vy = random.uniform(-520, -200)
+                    ax, ay = 0.0, LOCK_SHATTER_GRAVITY
+                    delay = random.uniform(0.0, 0.06)
+
+                self.break_pieces.append({
+                    "surf": surf,
+                    "x": float(x),
+                    "y": float(y),
+                    "vx": vx,
+                    "vy": vy,
+                    "ax": ax,
+                    "ay": ay,
+                    "delay": delay,
+                })
+
+    def _start_lock_transition(self):
+        self._snapshot_current_lock_view()
+
+        style = self._choose_break_style()
+        self.break_style = style
+        self.break_dur = float(LOCK_BREAK_DURATIONS.get(style, 0.85))
+
+        self._build_break_pieces(style)
+
+        self.lock_trans = self.LOCK_TRANS_BREAK
+        self.lock_trans_t0 = time.time()
+
+    def _update_lock_effects(self, dt: float):
+        # Always update pan while on lock (even during fade-in / break)
+        self._update_pan(dt)
+
+        if not LOCK_TRANSITION_ENABLE:
+            if (time.time() - self.lock_cycle_t0) >= LOCK_BG_CYCLE_S:
+                self._advance_image()
+            return
+
+        if self.lock_trans == self.LOCK_TRANS_BREAK:
+            t = time.time() - self.lock_trans_t0
+            for p in self.break_pieces:
+                if t < p.get("delay", 0.0):
                     continue
+                p["vx"] += p.get("ax", 0.0) * dt
+                p["vy"] += p.get("ay", 0.0) * dt
+                p["x"] += p["vx"] * dt
+                p["y"] += p["vy"] * dt
 
-            # If UI is visible, any input refreshes timeout
-            if state == STATE_ATTRACT and lock_ui_visible:
-                if e.type in (pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN):
-                    wake_lock_ui()
+            if t >= self.break_dur:
+                self._advance_image()
+                self.lock_trans = self.LOCK_TRANS_FADEIN
+                self.lock_trans_t0 = time.time()
+            return
 
-            # PIN overlay
-            if state == STATE_PIN:
-                if e.type == pygame.KEYDOWN:
-                    if e.key == pygame.K_RETURN:
-                        pin_submit()
-                    elif e.key == pygame.K_BACKSPACE:
-                        pin_input = pin_input[:-1]
-                    elif e.unicode.isdigit():
-                        if len(pin_input) < 12:
-                            pin_input += e.unicode
+        if self.lock_trans == self.LOCK_TRANS_FADEIN:
+            if (time.time() - self.lock_trans_t0) >= LOCK_FADEIN_S:
+                self.lock_trans = self.LOCK_TRANS_NONE
+                self.lock_cycle_t0 = time.time()
+            return
 
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    if pin_cancel_btn["rect"].collidepoint(e.pos):
-                        close_pin_prompt()
+        if (time.time() - self.lock_cycle_t0) >= LOCK_BG_CYCLE_S:
+            self._start_lock_transition()
+
+    def _draw_lock_background(self):
+        if self.lock_trans == self.LOCK_TRANS_BREAK:
+            self.screen.fill(COLOR_BG)
+            t = time.time() - self.lock_trans_t0
+            dur = max(0.001, float(self.break_dur))
+
+            u = max(0.0, min(1.0, t / dur))
+            alpha = int(255 * (1.0 - (u ** 1.4)))
+
+            for p in self.break_pieces:
+                surf = p["surf"]
+                surf.set_alpha(alpha)
+                self.screen.blit(surf, (int(p["x"]), int(p["y"])))
+            return
+
+        self._draw_lock_frame_to(self.screen)
+
+        if self.lock_trans == self.LOCK_TRANS_FADEIN:
+            t = time.time() - self.lock_trans_t0
+            u = max(0.0, min(1.0, t / max(0.001, LOCK_FADEIN_S)))
+            alpha = int(255 * (1.0 - u))
+            overlay = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            self.screen.blit(overlay, (0, 0))
+
+    # ---------------- square puzzle ----------------
+    def _make_tiles(self):
+        tile_w = self.W // GRID_X
+        tile_h = self.BOARD_H // GRID_Y
+
+        tiles = []
+        slot_positions = []
+        for y in range(GRID_Y):
+            for x in range(GRID_X):
+                slot_positions.append((x * tile_w, y * tile_h))
+
+        for slot_idx, (sx, sy) in enumerate(slot_positions):
+            rect = pygame.Rect(sx, sy, tile_w, tile_h)
+            tile_img = self.board_surf.subsurface(rect).copy()
+            tiles.append({
+                "image": tile_img,
+                "slot": slot_idx,
+                "correct": (sx, sy),
+                "pos": (sx, sy),
+                "locked": False,
+                "fall_from": (sx, sy),
+                "fall_to": (sx, sy),
+            })
+        return tiles, tile_w, tile_h, slot_positions
+
+    def _tray_random_pos(self, tile_w, tile_h):
+        x0 = TRAY_MARGIN
+        x1 = self.W - TRAY_MARGIN - tile_w
+        y0 = self.tray_rect.top + TRAY_MARGIN
+        y1 = self.tray_rect.bottom - TRAY_MARGIN - tile_h
+        if x1 < x0:
+            x1 = x0
+        if y1 < y0:
+            y1 = y0
+        return (random.randint(x0, x1), random.randint(y0, y1))
+
+    def _tile_rect(self, tile):
+        return pygame.Rect(tile["pos"], (self.tile_w, self.tile_h))
+
+    def _nearest_slot(self, tile):
+        px, py = tile["pos"]
+        best_i, best_d2 = None, None
+        for i, (sx, sy) in enumerate(self.slot_positions):
+            d2 = dist2((px, py), (sx, sy))
+            if best_d2 is None or d2 < best_d2:
+                best_i, best_d2 = i, d2
+        return best_i, math.sqrt(best_d2) if best_d2 is not None else 1e9
+
+    def _rebuild_slot_occupancy(self):
+        occ = {}
+        for t in self.tiles:
+            if t.get("locked"):
+                occ[t["slot"]] = t
+        return occ
+
+    def _solved_all_locked(self):
+        return all(t.get("locked") for t in self.tiles)
+
+    def _auto_snap_lock(self, drag_tile):
+        if drag_tile.get("locked"):
+            return False
+        nearest, d = self._nearest_slot(drag_tile)
+        if d > SNAP_DIST:
+            return False
+
+        target_slot = nearest
+        if target_slot != drag_tile["slot"]:
+            return False
+
+        target_pos = self.slot_positions[target_slot]
+        occ = self._rebuild_slot_occupancy()
+        occupant = occ.get(target_slot, None)
+        if occupant and occupant is not drag_tile:
+            occupant["locked"] = False
+            occupant["pos"] = self._tray_random_pos(self.tile_w, self.tile_h)
+
+        drag_tile["pos"] = target_pos
+        drag_tile["locked"] = True
+        return True
+
+    def enter_square_puzzle(self):
+        self.lock_trans = self.LOCK_TRANS_NONE
+        self.tiles, self.tile_w, self.tile_h, self.slot_positions = self._make_tiles()
+        self.drag_tile = None
+        for t in self.tiles:
+            t["locked"] = False
+            t["pos"] = t["correct"]
+            t["fall_from"] = t["correct"]
+            t["fall_to"] = self._tray_random_pos(self.tile_w, self.tile_h)
+        self.puz_stage = self.PUZ_INTRO
+        self.puz_t0 = time.time()
+        self.state = self.STATE_SQUARE
+
+    def _rescramble_square_unlocked(self):
+        for t in self.tiles:
+            if not t.get("locked"):
+                t["pos"] = self._tray_random_pos(self.tile_w, self.tile_h)
+
+    # ---------------- jigsaw ----------------
+    def enter_jig_select(self):
+        self.lock_trans = self.LOCK_TRANS_NONE
+        self.jigsaw_session = True
+        self.state = self.STATE_JIG_SELECT
+
+    def enter_jigsaw(self, cols, rows):
+        self.jig_cols, self.jig_rows = int(cols), int(rows)
+        self.jig_snap_dist = calc_jig_snap_dist(self.W, self.BOARD_H, self.jig_cols, self.jig_rows)
+
+        self.jig_pieces = build_jigsaw_pieces(self.W, self.BOARD_H, self.board_surf, self.jig_cols, self.jig_rows)
+        random.shuffle(self.jig_pieces)
+        for p in self.jig_pieces:
+            p["locked"] = False
+            p["pos"] = p["correct_pos"]
+            p["fall_from"] = p["correct_pos"]
+            p["fall_to"] = tray_random_pos_sized(self.W, self.tray_rect, p["surf"].get_width(), p["surf"].get_height())
+
+        self.jig_drag_piece = None
+        self.jig_stage = self.JIG_INTRO
+        self.jig_t0 = time.time()
+        self.state = self.STATE_JIGSAW
+
+    def back_to_lock(self):
+        self.jigsaw_session = False
+        self.state = self.STATE_LOCK
+        self.lock_cycle_t0 = time.time()
+        self.lock_trans = self.LOCK_TRANS_NONE
+        if LOCK_UI_START_HIDDEN:
+            self.lock_ui_visible_until = 0.0
+            self.lock_pressed = None
+
+    # ---------------- drawing helpers ----------------
+    def _draw_tray(self):
+        pygame.draw.rect(self.screen, COLOR_TRAY, self.tray_rect)
+        pygame.draw.line(self.screen, COLOR_LINE, (0, self.tray_rect.top), (self.W, self.tray_rect.top), 2)
+
+    def _draw_board_frame(self):
+        pygame.draw.rect(self.screen, COLOR_LINE, self.board_rect, 2)
+
+    # ---------------- lock dock interactions ----------------
+    def _dock_hit(self, pos):
+        if self.btn_unlock.collidepoint(pos):
+            return "unlock"
+        if self.btn_JigSaw.collidepoint(pos):
+            return "JigSaw"
+        if self.btn_admin.collidepoint(pos):
+            return "admin"
+        return None
+
+    def _draw_lock_dock(self):
+        a = clamp255(self.ui_alpha)
+        if a <= 0:
+            return
+
+        draw_modern_dock(self.screen, self.dock_rect, a)
+
+        mx, my = pygame.mouse.get_pos()
+        hover_unlock = self.btn_unlock.collidepoint((mx, my))
+        hover_JigSaw = self.btn_JigSaw.collidepoint((mx, my))
+        hover_admin = self.btn_admin.collidepoint((mx, my))
+
+        draw_modern_button(
+            self.screen, self.btn_unlock, "Unlock", self.font_dock,
+            _draw_icon_lock, ACCENT_UNLOCK,
+            active=hover_unlock, pressed=(self.lock_pressed == "unlock"), alpha=a
+        )
+        draw_modern_button(
+            self.screen, self.btn_JigSaw, "JigSaw", self.font_dock,
+            _draw_icon_JigSaw, ACCENT_JigSaw,
+            active=hover_JigSaw, pressed=(self.lock_pressed == "JigSaw"), alpha=a
+        )
+        draw_modern_button(
+            self.screen, self.btn_admin, "Admin", self.font_dock,
+            _draw_icon_key, ACCENT_ADMIN,
+            active=hover_admin, pressed=(self.lock_pressed == "admin"), alpha=a
+        )
+
+    # ---------------- main loop ----------------
+    def run(self):
+        try:
+            while True:
+                dt = min(0.05, self.clock.tick(60) / 1000.0)
+
+                for ev in pygame.event.get():
+                    if ev.type == pygame.QUIT:
                         continue
 
-                    KEYPAD_COLS = 3
-                    KEYPAD_ROWS = 4
-                    KEYPAD_KEYS = ["1", "2", "3",
-                                   "4", "5", "6",
-                                   "7", "8", "9",
-                                   "C", "0", "OK"]
-                    pad_w = min(520, int(W * 0.42))
-                    pad_h = min(520, int(H * 0.62))
-                    pad_x = (W - pad_w) // 2
-                    pad_y = (H - pad_h) // 2 + 40
-                    cell_w = pad_w // KEYPAD_COLS
-                    cell_h = pad_h // KEYPAD_ROWS
+                    # Interaction tracking for lock UI visibility
+                    if self.state == self.STATE_LOCK:
+                        if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN, pygame.FINGERMOTION):
+                            self._touch_lock_ui()
+                        elif ev.type == pygame.MOUSEMOTION:
+                            mx, my = ev.pos
+                            lx, ly = self.last_mouse_pos
+                            if (abs(mx - lx) + abs(my - ly)) >= LOCK_UI_MOUSE_MOVE_THRESH:
+                                self._touch_lock_ui()
+                                self.last_mouse_pos = (mx, my)
 
-                    idx = 0
-                    for r in range(KEYPAD_ROWS):
-                        for c in range(KEYPAD_COLS):
-                            x = pad_x + c * cell_w + 8
-                            y = pad_y + r * cell_h + 8
-                            rect = pygame.Rect(x, y, cell_w - 16, cell_h - 16)
-                            if rect.collidepoint(e.pos):
-                                key = KEYPAD_KEYS[idx]
-                                if key == "C":
-                                    pin_input = ""
-                                elif key == "OK":
-                                    pin_submit()
-                                else:
-                                    if len(pin_input) < 12:
-                                        pin_input += key
-                                break
-                            idx += 1
-                continue
-
-            # ATTRACT clicks
-            if state == STATE_ATTRACT:
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    if not lock_ui_visible:
-                        wake_lock_ui()
-                        continue
-                    if start_btn["rect"].collidepoint(e.pos):
-                        enter_square_puzzle()
-                    elif pi_btn["rect"].collidepoint(e.pos):
-                        open_pin_prompt(PIN_ACTION_PI, return_state=STATE_ATTRACT)
-                    elif solaris_btn["rect"].collidepoint(e.pos):
-                        open_pin_prompt(PIN_ACTION_SOLARIS, return_state=STATE_ATTRACT)
-                    elif jigsaw_btn["rect"].collidepoint(e.pos):
-                        enter_jigsaw_select()
-
-                if e.type == pygame.KEYDOWN:
-                    if e.key == pygame.K_RETURN and lock_ui_visible:
-                        enter_square_puzzle()
-                continue
-
-            # Square puzzle
-            if state == STATE_PUZZLE:
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    if home_btn["rect"].collidepoint(e.pos):
-                        back_to_lock()
+                    # ESC returns to lock
+                    if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                        if self.state != self.STATE_LOCK:
+                            self.back_to_lock()
                         continue
 
-                    if pi_btn["rect"].collidepoint(e.pos):
-                        open_pin_prompt(PIN_ACTION_PI, return_state=STATE_PUZZLE)
-                        continue
-                    if solaris_btn["rect"].collidepoint(e.pos):
-                        open_pin_prompt(PIN_ACTION_SOLARIS, return_state=STATE_PUZZLE)
-                        continue
-
-                    if puz_stage != PUZ_STAGE_PLAY:
-                        continue
-
-                    picked = None
-                    for t in reversed(tiles):
-                        if t.get("locked"):
+                    # LOCK
+                    if self.state == self.STATE_LOCK:
+                        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN:
+                            self.enter_square_puzzle()
                             continue
-                        if tile_rect(t, tile_w, tile_h).collidepoint(e.pos):
-                            picked = t
-                            break
 
-                    if picked:
-                        tiles.remove(picked)
-                        tiles.append(picked)
-                        drag_tile = picked
-                        drag_ox = e.pos[0] - drag_tile["pos"][0]
-                        drag_oy = e.pos[1] - drag_tile["pos"][1]
-                        play(snd_pick)
+                        if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+
+                            # First tap/click reveals UI only (no activation)
+                            if not self._lock_ui_visible():
+                                self._touch_lock_ui()
+                                self.lock_pressed = None
+                                continue
+
+                            # Press tracking (activate on release)
+                            self.lock_pressed = self._dock_hit(pos)
+
+                        if ev.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                            if not self._lock_ui_visible():
+                                self.lock_pressed = None
+                                continue
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                self.lock_pressed = None
+                                continue
+                            hit = self._dock_hit(pos)
+
+                            if self.lock_pressed and hit == self.lock_pressed:
+                                action = self.lock_pressed
+                                self.lock_pressed = None
+
+                                if action == "unlock":
+                                    self.enter_square_puzzle()
+                                    continue
+                                if action == "JigSaw":
+                                    self.enter_jig_select()
+                                    continue
+                                if action == "admin":
+                                    bg_frame = self._build_lock_frame_surface()
+                                    ok = pin_overlay_loop(self.screen, self.clock, self.W, self.H, bg_frame,
+                                                         self.font, self.font_small, self.snd_error)
+                                    if ok:
+                                        unlock_success_overlay(self.screen, self.clock, self.W, self.H,
+                                                             self.font_brand, self.font_small, self.snd_snap)
+                                        self.exit_unlocked()
+                                    continue
+                            else:
+                                self.lock_pressed = None
+
+                    # SQUARE
+                    elif self.state == self.STATE_SQUARE:
+                        if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+                            if self.back_btn["rect"].collidepoint(pos):
+                                self.back_to_lock()
+                                continue
+                            if self.puz_stage != self.PUZ_PLAY:
+                                continue
+
+                            picked = None
+                            for t in reversed(self.tiles):
+                                if t.get("locked"):
+                                    continue
+                                if self._tile_rect(t).collidepoint(pos):
+                                    picked = t
+                                    break
+
+                            if picked:
+                                self.tiles.remove(picked)
+                                self.tiles.append(picked)
+                                self.drag_tile = picked
+                                self.drag_ox = pos[0] - picked["pos"][0]
+                                self.drag_oy = pos[1] - picked["pos"][1]
+                                play(self.snd_pick)
+                            else:
+                                self._rescramble_square_unlocked()
+
+                        elif ev.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                            if self.puz_stage != self.PUZ_PLAY:
+                                continue
+                            if self.drag_tile:
+                                locked_now = self._auto_snap_lock(self.drag_tile)
+                                play(self.snd_snap if locked_now else self.snd_drop)
+                                self.drag_tile = None
+                                if self._solved_all_locked():
+                                    unlock_success_overlay(self.screen, self.clock, self.W, self.H,
+                                                         self.font_brand, self.font_small, self.snd_snap)
+                                    self.exit_unlocked()
+
+                        elif ev.type in (pygame.MOUSEMOTION, pygame.FINGERMOTION):
+                            if self.puz_stage != self.PUZ_PLAY or not self.drag_tile:
+                                continue
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+                            self.drag_tile["pos"] = (pos[0] - self.drag_ox, pos[1] - self.drag_oy)
+                            if self._auto_snap_lock(self.drag_tile):
+                                play(self.snd_snap)
+                                self.drag_tile = None
+                                if self._solved_all_locked():
+                                    unlock_success_overlay(self.screen, self.clock, self.W, self.H,
+                                                         self.font_brand, self.font_small, self.snd_snap)
+                                    self.exit_unlocked()
+
+                    # JIG SELECT
+                    elif self.state == self.STATE_JIG_SELECT:
+                        if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+                            if self.back_btn["rect"].collidepoint(pos):
+                                self.back_to_lock()
+                                continue
+
+                            box_w = min(720, int(self.W * 0.68))
+                            box_h = min(520, int(self.H * 0.62))
+                            box_x = (self.W - box_w) // 2
+                            box_y = (self.H - box_h) // 2
+                            option_h = 64
+                            gap = 12
+                            y = box_y + 90
+
+                            for label, c, r in JIG_DIFFICULTY_CHOICES:
+                                rect = pygame.Rect(box_x + 24, y, box_w - 48, option_h)
+                                if rect.collidepoint(pos):
+                                    self.enter_jigsaw(c, r)
+                                    break
+                                y += option_h + gap
+
+                    # JIGSAW
+                    elif self.state == self.STATE_JIGSAW:
+                        if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+                            if self.back_btn["rect"].collidepoint(pos):
+                                self.back_to_lock()
+                                continue
+                            if self.jig_stage != self.JIG_PLAY:
+                                continue
+
+                            picked = None
+                            for p in reversed(self.jig_pieces):
+                                if p.get("locked"):
+                                    continue
+                                px, py = p["pos"]
+                                lx = pos[0] - px
+                                ly = pos[1] - py
+                                if 0 <= lx < p["surf"].get_width() and 0 <= ly < p["surf"].get_height():
+                                    if p["mask"].get_at((int(lx), int(ly))):
+                                        picked = p
+                                        break
+
+                            if picked:
+                                self.jig_pieces.remove(picked)
+                                self.jig_pieces.append(picked)
+                                self.jig_drag_piece = picked
+                                self.jig_drag_ox = pos[0] - picked["pos"][0]
+                                self.jig_drag_oy = pos[1] - picked["pos"][1]
+                                play(self.snd_pick)
+                            else:
+                                for p in self.jig_pieces:
+                                    if not p.get("locked"):
+                                        p["pos"] = tray_random_pos_sized(self.W, self.tray_rect,
+                                                                        p["surf"].get_width(), p["surf"].get_height())
+
+                        elif ev.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                            if self.jig_stage != self.JIG_PLAY:
+                                continue
+                            if self.jig_drag_piece:
+                                p = self.jig_drag_piece
+                                cx, cy = p["correct_pos"]
+                                x, y = p["pos"]
+                                d = math.hypot(x - cx, y - cy)
+
+                                if d <= self.jig_snap_dist:
+                                    p["pos"] = p["correct_pos"]
+                                    p["locked"] = True
+                                    play(self.snd_snap)
+                                else:
+                                    play(self.snd_drop)
+
+                                self.jig_drag_piece = None
+
+                                if jigsaw_all_locked(self.jig_pieces):
+                                    self.jig_stage = self.JIG_SOLVED
+                                    self.jig_t0 = time.time()
+
+                        elif ev.type in (pygame.MOUSEMOTION, pygame.FINGERMOTION):
+                            if self.jig_stage != self.JIG_PLAY or not self.jig_drag_piece:
+                                continue
+                            pos = event_pos(ev, self.W, self.H)
+                            if not pos:
+                                continue
+                            self.jig_drag_piece["pos"] = (pos[0] - self.jig_drag_ox, pos[1] - self.jig_drag_oy)
+
+                # Updates / transitions
+                if self.state == self.STATE_LOCK:
+                    self._update_lock_effects(dt)
+
+                    # Dock fade alpha toward visible state
+                    target = 255.0 if self._lock_ui_visible() else 0.0
+                    if abs(target - self.ui_alpha) > 0.5:
+                        k = min(1.0, dt / max(0.001, LOCK_UI_FADE_S))
+                        self.ui_alpha = self.ui_alpha + (target - self.ui_alpha) * k
                     else:
-                        rescramble_square_puzzle()
+                        self.ui_alpha = target
 
-                elif e.type == pygame.MOUSEBUTTONUP:
-                    if puz_stage != PUZ_STAGE_PLAY:
-                        continue
-                    if drag_tile:
-                        occ = rebuild_slot_occupancy(tiles)
-                        locked_now = auto_snap_lock_with_swap(drag_tile, slot_positions, occ, tile_w, tile_h)
-                        if locked_now:
-                            play(snd_snap)
-                        else:
-                            play(snd_drop)
-                        drag_tile = None
+                if self.state == self.STATE_SQUARE:
+                    elapsed = time.time() - self.puz_t0
+                    if self.puz_stage == self.PUZ_INTRO:
+                        if elapsed >= PUZ_INTRO_HOLD_S:
+                            self.puz_stage = self.PUZ_FALL
+                            self.puz_t0 = time.time()
+                    elif self.puz_stage == self.PUZ_FALL:
+                        t = min(1.0, elapsed / max(0.001, PUZ_FALL_S))
+                        tx = _ease_out_cubic(t)
+                        ty = _ease_in_quad(t)
+                        for tile in self.tiles:
+                            x0, y0 = tile["fall_from"]
+                            x1, y1 = tile["fall_to"]
+                            tile["pos"] = (int(x0 + (x1 - x0) * tx), int(y0 + (y1 - y0) * ty))
+                        if t >= 1.0:
+                            self.puz_stage = self.PUZ_PLAY
+                            self.puz_t0 = time.time()
 
-                        if solved_all_locked(tiles):
-                            unlock_success_and_enter_vm()
+                if self.state == self.STATE_JIGSAW:
+                    elapsed = time.time() - self.jig_t0
+                    if self.jig_stage == self.JIG_INTRO:
+                        if elapsed >= JIG_INTRO_HOLD_S:
+                            self.jig_stage = self.JIG_FALL
+                            self.jig_t0 = time.time()
+                    elif self.jig_stage == self.JIG_FALL:
+                        t = min(1.0, elapsed / max(0.001, JIG_FALL_S))
+                        tx = _ease_out_cubic(t)
+                        ty = _ease_in_quad(t)
+                        for p in self.jig_pieces:
+                            x0, y0 = p["fall_from"]
+                            x1, y1 = p["fall_to"]
+                            p["pos"] = (int(x0 + (x1 - x0) * tx), int(y0 + (y1 - y0) * ty))
+                        if t >= 1.0:
+                            self.jig_stage = self.JIG_PLAY
+                            self.jig_t0 = time.time()
+                    elif self.jig_stage == self.JIG_SOLVED:
+                        if elapsed >= JIG_SOLVED_HOLD_S:
+                            if self.jigsaw_session:
+                                unlock_success_overlay(self.screen, self.clock, self.W, self.H,
+                                                     self.font_brand, self.font_small, self.snd_snap,
+                                                     msg="PUZZLE SOLVED", sub="Loading next image...", hold_s=0.65)
+                                self._advance_image()
+                                self.enter_jigsaw(self.jig_cols, self.jig_rows)
+                            else:
+                                unlock_success_overlay(self.screen, self.clock, self.W, self.H,
+                                                     self.font_brand, self.font_small, self.snd_snap)
+                                self.exit_unlocked()
 
-                elif e.type == pygame.MOUSEMOTION and drag_tile and puz_stage == PUZ_STAGE_PLAY:
-                    drag_tile["pos"] = (e.pos[0] - drag_ox, e.pos[1] - drag_oy)
-                    occ = rebuild_slot_occupancy(tiles)
-                    if auto_snap_lock_with_swap(drag_tile, slot_positions, occ, tile_w, tile_h):
-                        play(snd_snap)
-                        drag_tile = None
-                        if solved_all_locked(tiles):
-                            unlock_success_and_enter_vm()
-                continue
+                # Draw
+                self.screen.fill(COLOR_BG)
 
-            # Jigsaw select prompt
-            if state == STATE_JIG_SELECT:
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    if jig_select_back_btn["rect"].collidepoint(e.pos):
-                        back_to_lock()
-                        continue
+                # LOCK
+                if self.state == self.STATE_LOCK:
+                    self._draw_lock_background()
+                    self._draw_status_bar()
 
-                    box_w = min(720, int(W * 0.68))
-                    box_x = (W - box_w) // 2
-                    box_y = (H - min(520, int(H * 0.62))) // 2
+                    pulse = 0.5 + 0.5 * math.sin(time.time() * 1.5)
+                    brand_color = (255, 255, int(180 + 60 * pulse))
+                    bt = self.font_brand.render(BRAND_TEXT, True, brand_color)
+                    bs = self.font_brand2.render(BRAND_SUB, True, (230, 230, 230))
+                    y0 = STATUS_BAR_H + 10 if SHOW_STATUS_BAR else 18
+                    self.screen.blit(bt, (self.W // 2 - bt.get_width() // 2, y0))
+                    self.screen.blit(bs, (self.W // 2 - bs.get_width() // 2, y0 + bt.get_height() + 6))
+
+                    # Dock (modern buttons)
+                    self._draw_lock_dock()
+
+                    # Hint line (always)
+                    if self._lock_ui_visible() or self.ui_alpha > 40:
+                        hint = self.font_small.render("", True, (230, 230, 230))
+                    else:
+                        hint = self.font_small.render("Tap to show options", True, (230, 230, 230))
+                    self.screen.blit(hint, (self.W // 2 - hint.get_width() // 2, self.H - 42))
+
+                # SQUARE
+                elif self.state == self.STATE_SQUARE:
+                    if self.puz_stage == self.PUZ_INTRO:
+                        bg = self._build_lock_frame_surface()
+                        self.screen.blit(bg, (0, 0))
+                        mx, my = pygame.mouse.get_pos()
+                        draw_button(self.screen, self.back_btn, self.font, self.font_small,
+                                    active=self.back_btn["rect"].collidepoint((mx, my)), small=True)
+                        msg = self.font_small.render("Preparing puzzle...", True, (235, 235, 235))
+                        self.screen.blit(msg, (self.W // 2 - msg.get_width() // 2, self.H - 42))
+                    else:
+                        pygame.draw.rect(self.screen, COLOR_BG, self.board_rect)
+                        self._draw_tray()
+                        self._draw_board_frame()
+
+                        for x in range(1, GRID_X):
+                            pygame.draw.line(self.screen, (35, 35, 35), (x * self.tile_w, 0), (x * self.tile_w, self.BOARD_H), 1)
+                        for y in range(1, GRID_Y):
+                            pygame.draw.line(self.screen, (35, 35, 35), (0, y * self.tile_h), (self.W, y * self.tile_h), 1)
+
+                        for t in self.tiles:
+                            self.screen.blit(t["image"], t["pos"])
+                            if t.get("locked"):
+                                pygame.draw.rect(self.screen, (0, 255, 0), pygame.Rect(t["pos"], (self.tile_w, self.tile_h)), 3)
+
+                        mx, my = pygame.mouse.get_pos()
+                        draw_button(self.screen, self.back_btn, self.font, self.font_small,
+                                    active=self.back_btn["rect"].collidepoint((mx, my)), small=True)
+
+                        hint = self.font_small.render(
+                            "Drag tiles into place. Tap empty to re-scramble." if self.puz_stage == self.PUZ_PLAY else "Breaking...",
+                            True, (230, 230, 230)
+                        )
+                        self.screen.blit(hint, (16, self.BOARD_H - 32))
+
+                # JIG SELECT
+                elif self.state == self.STATE_JIG_SELECT:
+                    bg = self._build_lock_frame_surface()
+                    self.screen.blit(bg, (0, 0))
+                    overlay = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+                    overlay.fill((0, 0, 0, 175))
+                    self.screen.blit(overlay, (0, 0))
+
+                    mx, my = pygame.mouse.get_pos()
+                    draw_button(self.screen, self.back_btn, self.font, self.font_small,
+                                active=self.back_btn["rect"].collidepoint((mx, my)), small=True)
+
+                    box_w = min(720, int(self.W * 0.68))
+                    box_h = min(520, int(self.H * 0.62))
+                    box_x = (self.W - box_w) // 2
+                    box_y = (self.H - box_h) // 2
+                    pygame.draw.rect(self.screen, (35, 35, 35), pygame.Rect(box_x, box_y, box_w, box_h), border_radius=18)
+                    pygame.draw.rect(self.screen, (230, 230, 230), pygame.Rect(box_x, box_y, box_w, box_h), 2, border_radius=18)
+
+                    title = self.font.render("JIGSAW DIFFICULTY", True, (255, 255, 255))
+                    sub = self.font_small.render("Select a grid size (more pieces = harder)", True, (230, 230, 230))
+                    self.screen.blit(title, (self.W // 2 - title.get_width() // 2, box_y + 20))
+                    self.screen.blit(sub, (self.W // 2 - sub.get_width() // 2, box_y + 60))
+
                     option_h = 64
                     gap = 12
                     y = box_y + 90
                     for label, c, r in JIG_DIFFICULTY_CHOICES:
                         rect = pygame.Rect(box_x + 24, y, box_w - 48, option_h)
-                        if rect.collidepoint(e.pos):
-                            enter_jigsaw_mode(c, r)
-                            break
+                        btn = make_button(rect, f"{label} | {c} x {r}", color=(120, 120, 120))
+                        draw_button(self.screen, btn, self.font, self.font_small, active=rect.collidepoint((mx, my)), small=True)
                         y += option_h + gap
-                continue
 
-            # Jigsaw mode
-            if state == STATE_JIGSAW:
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    if home_btn["rect"].collidepoint(e.pos):
-                        back_to_lock()
-                        continue
-
-                    if jig_stage != JIG_STAGE_PLAY:
-                        continue
-
-                    picked = None
-                    for p in reversed(jig_pieces):
-                        if p.get("locked"):
-                            continue
-                        px, py = p["pos"]
-                        lx = e.pos[0] - px
-                        ly = e.pos[1] - py
-                        if 0 <= lx < p["surf"].get_width() and 0 <= ly < p["surf"].get_height():
-                            if p["mask"].get_at((int(lx), int(ly))):
-                                picked = p
-                                break
-
-                    if picked:
-                        jig_pieces.remove(picked)
-                        jig_pieces.append(picked)
-                        jig_drag_piece = picked
-                        jig_drag_ox = e.pos[0] - picked["pos"][0]
-                        jig_drag_oy = e.pos[1] - picked["pos"][1]
-                        play(snd_pick)
+                # JIGSAW
+                elif self.state == self.STATE_JIGSAW:
+                    if self.jig_stage == self.JIG_INTRO:
+                        bg = self._build_lock_frame_surface()
+                        self.screen.blit(bg, (0, 0))
+                        mx, my = pygame.mouse.get_pos()
+                        draw_button(self.screen, self.back_btn, self.font, self.font_small,
+                                    active=self.back_btn["rect"].collidepoint((mx, my)), small=True)
                     else:
-                        for p in jig_pieces:
-                            if not p.get("locked"):
-                                p["pos"] = tray_random_pos_sized(p["surf"].get_width(), p["surf"].get_height())
+                        self.screen.blit(self.board_surf, (0, 0))
+                        if self.jig_stage in (self.JIG_PLAY, self.JIG_SOLVED) and JIG_BG_DIM_ALPHA > 0:
+                            dim = pygame.Surface((self.W, self.BOARD_H), pygame.SRCALPHA)
+                            dim.fill((0, 0, 0, JIG_BG_DIM_ALPHA))
+                            self.screen.blit(dim, (0, 0))
 
-                elif e.type == pygame.MOUSEBUTTONUP:
-                    if jig_stage != JIG_STAGE_PLAY:
-                        continue
-                    if jig_drag_piece:
-                        p = jig_drag_piece
-                        cx, cy = p["correct_pos"]
-                        x, y = p["pos"]
-                        d = math.hypot(x - cx, y - cy)
+                        self._draw_tray()
 
-                        # NEW: dynamic snap dist
-                        if d <= jig_snap_dist:
-                            p["pos"] = p["correct_pos"]
-                            p["locked"] = True
-                            play(snd_snap)
-                        else:
-                            play(snd_drop)
+                        for p in self.jig_pieces:
+                            self.screen.blit(p["surf"], p["pos"])
+                            if p.get("locked"):
+                                pygame.draw.rect(self.screen, (0, 180, 0), pygame.Rect(p["pos"], p["surf"].get_size()), 2)
 
-                        jig_drag_piece = None
+                        mx, my = pygame.mouse.get_pos()
+                        draw_button(self.screen, self.back_btn, self.font, self.font_small,
+                                    active=self.back_btn["rect"].collidepoint((mx, my)), small=True)
 
-                        if jigsaw_all_locked(jig_pieces):
-                            jig_stage = JIG_STAGE_SOLVED
-                            jig_t0 = time.time()
-
-                elif e.type == pygame.MOUSEMOTION and jig_drag_piece and jig_stage == JIG_STAGE_PLAY:
-                    jig_drag_piece["pos"] = (e.pos[0] - jig_drag_ox, e.pos[1] - jig_drag_oy)
-                continue
-
-        # -------- Update timers/animations --------
-        if state == STATE_ATTRACT:
-            update_lock_ui_timeout()
-
-            elapsed = time.time() - attr_t0
-
-            if attr_stage == ATTR_STAGE_WHOLE:
-                if elapsed >= ATTR_WHOLE_HOLD_S:
-                    attr_stage = ATTR_STAGE_BREAK
-                    attr_t0 = time.time()
-                    attr_break_fx = start_break_fx(W, H)
-
-            elif attr_stage == ATTR_STAGE_BREAK:
-                t = min(1.0, elapsed / max(0.001, ATTR_BREAK_S))
-                for i, tile in enumerate(attr_tiles):
-                    tile["pos"] = lerp_pos(tile["correct"], attr_scatter_targets[i], t)
-                if t >= 1.0:
-                    attr_stage = ATTR_STAGE_SCRAMBLE
-                    attr_t0 = time.time()
-
-            elif attr_stage == ATTR_STAGE_SCRAMBLE:
-                for tile in attr_tiles:
-                    px, py = tile["pos"]
-                    vx, vy = tile.get("vel", (0.0, 0.0))
-                    tw = tile.get("w", 0)
-                    th = tile.get("h", 0)
-
-                    px += vx * dt
-                    py += vy * dt
-
-                    if px < 0:
-                        px = 0
-                        vx = abs(vx)
-                    elif px > W - tw:
-                        px = W - tw
-                        vx = -abs(vx)
-
-                    if py < 0:
-                        py = 0
-                        vy = abs(vy)
-                    elif py > H - th:
-                        py = H - th
-                        vy = -abs(vy)
-
-                    tile["pos"] = (int(px), int(py))
-                    tile["vel"] = (vx, vy)
-
-                if elapsed >= ATTR_SCRAMBLE_S:
-                    attr_assemble_from = [t["pos"] for t in attr_tiles]
-                    attr_stage = ATTR_STAGE_ASSEMBLE
-                    attr_t0 = time.time()
-
-            elif attr_stage == ATTR_STAGE_ASSEMBLE:
-                t = min(1.0, elapsed / max(0.001, ATTR_ASSEMBLE_S))
-                for i, tile in enumerate(attr_tiles):
-                    tile["pos"] = lerp_pos(attr_assemble_from[i], tile["correct"], t)
-                if t >= 1.0:
-                    attr_stage = ATTR_STAGE_HOLD
-                    attr_t0 = time.time()
-
-            elif attr_stage == ATTR_STAGE_HOLD:
-                if elapsed >= ATTR_POST_ASSEMBLE_S:
-                    start_new_attract_cycle()
-
-        if state == STATE_PUZZLE:
-            elapsed = time.time() - puz_t0
-
-            if puz_stage == PUZ_STAGE_INTRO:
-                if elapsed >= PUZ_INTRO_HOLD_S:
-                    puz_stage = PUZ_STAGE_FALL
-                    puz_t0 = time.time()
-                    puz_break_fx = start_break_fx(W, BOARD_H)
-
-            elif puz_stage == PUZ_STAGE_FALL:
-                t = min(1.0, elapsed / max(0.001, PUZ_FALL_S))
-                tx = _ease_out_cubic(t)
-                ty = _ease_in_quad(t)
-                for tile in tiles:
-                    x0, y0 = tile["fall_from"]
-                    x1, y1 = tile["fall_to"]
-                    tile["pos"] = (int(x0 + (x1 - x0) * tx), int(y0 + (y1 - y0) * ty))
-
-                if t >= 1.0:
-                    puz_stage = PUZ_STAGE_PLAY
-                    puz_t0 = time.time()
-
-        if state == STATE_JIGSAW:
-            elapsed = time.time() - jig_t0
-
-            if jig_stage == JIG_STAGE_INTRO:
-                if elapsed >= JIG_INTRO_HOLD_S:
-                    jig_stage = JIG_STAGE_FALL
-                    jig_t0 = time.time()
-                    jig_break_fx = start_break_fx(W, BOARD_H)
-
-            elif jig_stage == JIG_STAGE_FALL:
-                t = min(1.0, elapsed / max(0.001, JIG_FALL_S))
-                tx = _ease_out_cubic(t)
-                ty = _ease_in_quad(t)
-                for p in jig_pieces:
-                    x0, y0 = p["fall_from"]
-                    x1, y1 = p["fall_to"]
-                    p["pos"] = (int(x0 + (x1 - x0) * tx), int(y0 + (y1 - y0) * ty))
-                if t >= 1.0:
-                    jig_stage = JIG_STAGE_PLAY
-                    jig_t0 = time.time()
-
-            elif jig_stage == JIG_STAGE_SOLVED:
-                if elapsed >= JIG_SOLVED_HOLD_S:
-                    advance_jigsaw_image()
-
-        # -------- Draw --------
-        screen.fill(COLOR_BG)
-
-        # ATTRACT
-        if state == STATE_ATTRACT:
-            if attr_stage in (ATTR_STAGE_WHOLE, ATTR_STAGE_HOLD):
-                screen.blit(lock_surf, (0, 0))
-            else:
-                # FULL-SCREEN tiles; no unbroken tray region
-                screen.fill(COLOR_BG)
-                for t in attr_tiles:
-                    screen.blit(t["image"], t["pos"])
-                if attr_stage == ATTR_STAGE_BREAK:
-                    draw_crack_overlay_fade(attr_break_fx)
-
-            draw_status_bar()
-
-            pulse = 0.5 + 0.5 * math.sin(time.time() * 1.5)
-            brand_color = (255, 255, int(180 + 60 * pulse))
-            bt = font_brand.render(BRAND_TEXT, True, brand_color)
-            bs = font_brand2.render(BRAND_SUB, True, (230, 230, 230))
-            y0 = STATUS_BAR_H + 10 if LOCK_SHOW_STATUS_BAR else 18
-            screen.blit(bt, (W // 2 - bt.get_width() // 2, y0))
-            screen.blit(bs, (W // 2 - bs.get_width() // 2, y0 + bt.get_height() + 6))
-
-            if lock_ui_visible:
-                mx, my = pygame.mouse.get_pos()
-                draw_button(start_btn, active=start_btn["rect"].collidepoint((mx, my)))
-                draw_button(pi_btn, active=pi_btn["rect"].collidepoint((mx, my)), small=True)
-                draw_button(jigsaw_btn, active=jigsaw_btn["rect"].collidepoint((mx, my)), small=True)
-                draw_button(solaris_btn, active=solaris_btn["rect"].collidepoint((mx, my)), small=True)
-            else:
-                hint = font_small.render("Tap or press any key to show controls", True, (230, 230, 230))
-                screen.blit(hint, (W // 2 - hint.get_width() // 2, H - 42))
-
-        # Square puzzle
-        elif state == STATE_PUZZLE:
-            if puz_stage == PUZ_STAGE_INTRO:
-                screen.blit(lock_surf, (0, 0))
-                mx, my = pygame.mouse.get_pos()
-                draw_button(home_btn, active=home_btn["rect"].collidepoint((mx, my)), small=True)
-                msg = font_small.render("Preparing puzzle...", True, (235, 235, 235))
-                screen.blit(msg, (W // 2 - msg.get_width() // 2, H - 42))
-            else:
-                pygame.draw.rect(screen, COLOR_BG, board_rect)
-
-                draw_tray()
-                draw_board_frame()
-
-                ox, oy = break_shake_offset(puz_break_fx) if (puz_stage == PUZ_STAGE_FALL) else (0, 0)
-
-                # grid lines
-                for x in range(1, GRID_X):
-                    pygame.draw.line(screen, (35, 35, 35), (x * tile_w, 0), (x * tile_w, BOARD_H), 1)
-                for y in range(1, GRID_Y):
-                    pygame.draw.line(screen, (35, 35, 35), (0, y * tile_h), (W, y * tile_h), 1)
-
-                # tiles
-                for t in tiles:
-                    screen.blit(t["image"], (t["pos"][0] + ox, t["pos"][1] + oy))
-                    if t.get("locked"):
-                        pygame.draw.rect(
-                            screen, (0, 255, 0),
-                            pygame.Rect((t["pos"][0] + ox, t["pos"][1] + oy), (tile_w, tile_h)), 3
+                        hint = self.font_small.render(
+                            "Drag pieces into place. Tap empty to re-scramble." if self.jig_stage == self.JIG_PLAY else
+                            ("Breaking..." if self.jig_stage == self.JIG_FALL else "Solved. Loading next image..."),
+                            True, (230, 230, 230)
                         )
+                        self.screen.blit(hint, (16, self.BOARD_H - 32))
 
-                if puz_stage == PUZ_STAGE_FALL:
-                    draw_crack_overlay_fade(puz_break_fx)
+                pygame.display.flip()
 
-                mx, my = pygame.mouse.get_pos()
-                draw_button(home_btn, active=home_btn["rect"].collidepoint((mx, my)), small=True)
-                draw_button(pi_btn, active=pi_btn["rect"].collidepoint((mx, my)), small=True)
-                draw_button(solaris_btn, active=solaris_btn["rect"].collidepoint((mx, my)), small=True)
+        except SystemExit:
+            raise
+        except Exception as e:
+            try:
+                print(f"FATAL: {e}", file=sys.stderr)
+            except Exception:
+                pass
+            sys.exit(1)
+        finally:
+            try:
+                pygame.quit()
+            except Exception:
+                pass
 
-                hint = font_small.render(
-                    "Drag to solve. Tap empty to re-scramble." if puz_stage == PUZ_STAGE_PLAY else "Breaking",
-                    True, (230, 230, 230)
-                )
-                screen.blit(hint, (16, BOARD_H - 32))
-
-        # Jigsaw select prompt
-        elif state == STATE_JIG_SELECT:
-            screen.blit(lock_surf, (0, 0))
-            overlay = pygame.Surface((W, H), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 175))
-            screen.blit(overlay, (0, 0))
-
-            mx, my = pygame.mouse.get_pos()
-            draw_button(jig_select_back_btn, active=jig_select_back_btn["rect"].collidepoint((mx, my)), small=True)
-
-            box_w = min(720, int(W * 0.68))
-            box_h = min(520, int(H * 0.62))
-            box_x = (W - box_w) // 2
-            box_y = (H - box_h) // 2
-            pygame.draw.rect(screen, (35, 35, 35), pygame.Rect(box_x, box_y, box_w, box_h), border_radius=18)
-            pygame.draw.rect(screen, (230, 230, 230), pygame.Rect(box_x, box_y, box_w, box_h), 2, border_radius=18)
-
-            title = font.render("JIGSAW DIFFICULTY", True, (255, 255, 255))
-            sub = font_small.render("Select a grid size (more pieces = harder)", True, (230, 230, 230))
-            screen.blit(title, (W // 2 - title.get_width() // 2, box_y + 20))
-            screen.blit(sub, (W // 2 - sub.get_width() // 2, box_y + 60))
-
-            option_h = 64
-            gap = 12
-            y = box_y + 90
-            for label, c, r in JIG_DIFFICULTY_CHOICES:
-                rect = pygame.Rect(box_x + 24, y, box_w - 48, option_h)
-                btn = make_button(rect, f"{label} | {c} x {r}", color=COLOR_JIGSAW)
-                draw_button(btn, active=rect.collidepoint((mx, my)), small=True)
-                y += option_h + gap
-
-        # Jigsaw mode
-        elif state == STATE_JIGSAW:
-            if jig_stage == JIG_STAGE_INTRO:
-                screen.blit(lock_surf, (0, 0))
-                mx, my = pygame.mouse.get_pos()
-                draw_button(home_btn, active=home_btn["rect"].collidepoint((mx, my)), small=True)
-            else:
-                if jig_stage in (JIG_STAGE_FALL, JIG_STAGE_SOLVED):
-                    screen.blit(board_surf, (0, 0))
-                else:
-                    if JIG_BG_DIM_ALPHA == 0:
-                        pygame.draw.rect(screen, (0, 0, 0), board_rect)
-                    else:
-                        screen.blit(board_surf, (0, 0))
-                        dim = pygame.Surface((W, BOARD_H), pygame.SRCALPHA)
-                        dim.fill((0, 0, 0, JIG_BG_DIM_ALPHA))
-                        screen.blit(dim, (0, 0))
-
-                draw_tray()
-
-                ox, oy = break_shake_offset(jig_break_fx) if (jig_stage == JIG_STAGE_FALL) else (0, 0)
-
-                for p in jig_pieces:
-                    screen.blit(p["surf"], (p["pos"][0] + ox, p["pos"][1] + oy))
-                    if p.get("locked"):
-                        pygame.draw.rect(
-                            screen, (0, 180, 0),
-                            pygame.Rect((p["pos"][0] + ox, p["pos"][1] + oy), p["surf"].get_size()), 2
-                        )
-
-                if jig_stage == JIG_STAGE_FALL:
-                    draw_crack_overlay_fade(jig_break_fx)
-
-                mx, my = pygame.mouse.get_pos()
-                draw_button(home_btn, active=home_btn["rect"].collidepoint((mx, my)), small=True)
-
-                if jig_stage == JIG_STAGE_PLAY:
-                    hint = font_small.render("Drag pieces into place. Tap empty to re-scramble.", True, (230, 230, 230))
-                elif jig_stage == JIG_STAGE_FALL:
-                    hint = font_small.render("Breaking", True, (230, 230, 230))
-                else:
-                    hint = font_small.render("Solved. Loading next puzzle", True, (230, 230, 230))
-                screen.blit(hint, (16, BOARD_H - 32))
-
-        # PIN overlay draw
-        if state == STATE_PIN:
-            overlay = pygame.Surface((W, H), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 205))
-            screen.blit(overlay, (0, 0))
-
-            mx, my = pygame.mouse.get_pos()
-            draw_button(pin_cancel_btn, active=pin_cancel_btn["rect"].collidepoint((mx, my)), small=True)
-
-            action_label = "OPEN SOLARIS" if pin_action == PIN_ACTION_SOLARIS else "PI DESKTOP"
-            title = font.render(f"ADMIN OVERRIDE - {action_label}", True, (255, 255, 255))
-            prompt = font_small.render("Enter PIN (keyboard or touchscreen keypad):", True, (230, 230, 230))
-            masked = "*" * len(pin_input)
-            entry = font.render(masked, True, (255, 255, 0))
-
-            screen.blit(title, (W // 2 - title.get_width() // 2, 80))
-            screen.blit(prompt, (W // 2 - prompt.get_width() // 2, 130))
-            screen.blit(entry, (W // 2 - entry.get_width() // 2, 165))
-
-            KEYPAD_COLS = 3
-            KEYPAD_ROWS = 4
-            KEYPAD_KEYS = ["1", "2", "3",
-                           "4", "5", "6",
-                           "7", "8", "9",
-                           "C", "0", "OK"]
-            pad_w = min(520, int(W * 0.42))
-            pad_h = min(520, int(H * 0.62))
-            pad_x = (W - pad_w) // 2
-            pad_y = (H - pad_h) // 2 + 40
-            cell_w = pad_w // KEYPAD_COLS
-            cell_h = pad_h // KEYPAD_ROWS
-
-            pygame.draw.rect(screen, (35, 35, 35), pygame.Rect(pad_x, pad_y, pad_w, pad_h), border_radius=12)
-
-            rects = []
-            for r in range(KEYPAD_ROWS):
-                for c in range(KEYPAD_COLS):
-                    x = pad_x + c * cell_w + 8
-                    y = pad_y + r * cell_h + 8
-                    rects.append(pygame.Rect(x, y, cell_w - 16, cell_h - 16))
-
-            for i, r in enumerate(rects):
-                pygame.draw.rect(screen, (70, 70, 70), r, border_radius=10)
-                label = font.render(KEYPAD_KEYS[i], True, (255, 255, 255))
-                screen.blit(label, (r.centerx - label.get_width() // 2, r.centery - label.get_height() // 2))
-
-            if pin_error and (time.time() - pin_error_t0) < 2.0:
-                err = font_small.render(pin_error, True, (255, 90, 90))
-                screen.blit(err, (W // 2 - err.get_width() // 2, pad_y + pad_h + 18))
-
-            tip = font_small.render("Enter=submit, Backspace=delete, OK=submit. Esc/CANCEL=back.", True,
-                                    (230, 230, 230))
-            screen.blit(tip, (W // 2 - tip.get_width() // 2, pad_y + pad_h + 50))
-
-        pygame.display.flip()
-
-except SystemExit:
-    raise
-except Exception as e:
-    try:
-        print(f"FATAL: {e}", file=sys.stderr)
-    except Exception:
-        pass
-    sys.exit(1)
-finally:
-    try:
-        pygame.quit()
-    except Exception:
-        pass
-
+# ============================================================
+# Entrypoint
+# ============================================================
+if __name__ == "__main__":
+    LockApp().run()

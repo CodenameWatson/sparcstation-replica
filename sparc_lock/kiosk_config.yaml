@@ -1,12 +1,16 @@
+security:
+  pi_pin: "1193"
+
 feature_flags:
-  post_unlock: "menu"        # "menu" or "solaris"
+  enable_pi: true
+  enable_solaris: true
   enable_games: true
   enable_media: true
-  enable_power: true        # keep false until sudoers is added and verified
+  enable_power: true
 
 idle:
-  menu_seconds: 120           # idle in menu -> relock
-  external_seconds: 300       # idle in mpv/games/vnc -> kill app and return to menu
+  menu_seconds: 60           # idle in menu -> relock
+  external_seconds: 60       # idle in mpv/games/vnc -> kill app and return to menu
 
 ui:
   title: "SPARCstation"
