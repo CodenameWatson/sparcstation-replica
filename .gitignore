@@ -29,3 +29,20 @@ sparc_lock/images/*
 sparc_lock/sounds/*
 !sparc_lock/images/.keep
 !sparc_lock/sounds/.keep
+
+# Runtime artifacts
+sparc_lock/logs/
+sparc_lock/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.log
+*.bak.*
+.DS_Store
+
+# Personal media (keep on device, not in git)
+sparc_lock/images/
+
+# Kiosk legacy session wrappers (retired)
+sparc_lock/*-session.sh
+sparc_lock/systemd/

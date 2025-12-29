@@ -1,30 +1,65 @@
 #!/usr/bin/env bash
+trap 'echo "[$(date -Is)] start_lock.sh got SIGTERM/SIGINT; exiting"; exit 0' TERM INT
 set -euo pipefail
 
-cd /home/pi/sparc_lock
+BASE="/home/pi/sparc_lock"
+LOGDIR="$BASE/logs"
+LOG="$LOGDIR/start_lock.log"
+mkdir -p "$LOGDIR"
+
+# log everything
+exec >>"$LOG" 2>&1
+echo "[$(date -Is)] start_lock.sh begin (uid=$(id -u) user=$(id -un))"
 
 export HOME="/home/pi"
 export USER="pi"
 export LOGNAME="pi"
-
 export DISPLAY="${DISPLAY:-:0}"
-export XAUTHORITY="${XAUTHORITY:-/home/pi/.Xauthority}"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 
-# Force SDL to use X11 (prevents DRM/KMS "CRTC/pageflip" failures)
-export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
-unset WAYLAND_DISPLAY
-unset WAYLAND_SOCKET
+# Force SDL to use X11 (prevents accidental fallback)
+export SDL_VIDEODRIVER=x11
 
-export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS="0"
-export PYGAME_HIDE_SUPPORT_PROMPT="1"
+echo "[$(date -Is)] DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
 
-# Prevent blanking / DPMS (only if xset exists)
+# Single-instance lock:
+# If a previous session is still shutting down, WAIT for it to release the lock.
+LOCKFILE="/tmp/sparc_kiosk.lock"
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+  echo "[$(date -Is)] Another kiosk instance holds $LOCKFILE; waiting for it to exit..."
+  flock 9
+  echo "[$(date -Is)] Lock acquired; continuing."
+fi
+
+# Wait for X to be ready (must succeed, not best-effort)
 if command -v xset >/dev/null 2>&1; then
-  xset s off || true
+  for i in $(seq 1 120); do
+    if xset q >/dev/null 2>&1; then
+      echo "[$(date -Is)] X ready (xset q ok)"
+      break
+    fi
+    sleep 0.25
+  done
+  if ! xset q >/dev/null 2>&1; then
+    echo "[$(date -Is)] ERROR: X still not reachable after wait; sleeping forever."
+    while true; do sleep 60; done
+  fi
+fi
+
+# Disable blanking (best-effort)
+if command -v xset >/dev/null 2>&1; then
+  xset s off  || true
   xset -dpms || true
   xset s noblank || true
 fi
 
-mkdir -p /home/pi/sparc_lock/logs
-exec python3 -u /home/pi/sparc_lock/kiosk_shell.py >> /home/pi/sparc_lock/logs/kiosk_shell.log 2>&1
+# Keep session alive; restart kiosk shell if it exits
+while true; do
+  echo "[$(date -Is)] Launching kiosk_shell.py"
+  /usr/bin/python3 -u "$BASE/kiosk_shell.py"
+  rc=$?
+  echo "[$(date -Is)] kiosk_shell.py exited rc=$rc; restarting in 2s"
+  sleep 2
+done

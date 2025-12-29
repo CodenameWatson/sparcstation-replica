@@ -88,7 +88,7 @@ COLOR_LINE = (70, 70, 70)
 UI_TEXT = (240, 240, 240)
 UI_MUTED = (210, 210, 210)
 
-# Button “accents” (subtle, not loud)
+# Button ï¿½accentsï¿½ (subtle, not loud)
 ACCENT_UNLOCK = (70, 185, 120)
 ACCENT_JigSaw = (170, 170, 170)
 ACCENT_ADMIN = (120, 200, 255)
@@ -317,7 +317,7 @@ def _draw_icon_JigSaw(dst, center, color, alpha=255):
     # stacked frames
     pygame.draw.rect(s, col, pygame.Rect(10, 10, 18, 14), 2, border_radius=3)
     pygame.draw.rect(s, col, pygame.Rect(14, 14, 18, 14), 2, border_radius=3)
-    # small “mountain” line
+    # small ï¿½mountainï¿½ line
     pygame.draw.line(s, col, (16, 24), (22, 18), 2)
     pygame.draw.line(s, col, (22, 18), (30, 26), 2)
     dst.blit(s, (cx - 20, cy - 20))
@@ -818,11 +818,11 @@ class LockApp:
         self.jig_stage = self.JIG_INTRO
         self.jig_t0 = 0.0
 
-        # Back button (keep old style for now; it’s already compact)
+        # Back button (keep old style for now; itï¿½s already compact)
         self.back_btn = make_button(pygame.Rect(16, 16, 160, 48), "BACK", color=(120, 120, 120))
 
     def _layout_lock_dock(self):
-        # A compact “family kiosk” dock: centered, not oversized.
+        # A compact ï¿½family kioskï¿½ dock: centered, not oversized.
         margin_bottom = 28
         dock_w = min(780, int(self.W * 0.68))
         dock_h = 96

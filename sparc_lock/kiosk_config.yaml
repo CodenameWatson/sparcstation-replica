@@ -1,5 +1,12 @@
-security:
-  pi_pin: "1193"
+ui:
+  title: "Glover SPARCstation"
+  fps: 60
+  font_size: 52
+  small_font_size: 26
+
+idle:
+  menu_seconds: 120
+  external_seconds: 30
 
 feature_flags:
   enable_pi: true
@@ -8,22 +15,15 @@ feature_flags:
   enable_media: true
   enable_power: true
 
-idle:
-  menu_seconds: 60           # idle in menu -> relock
-  external_seconds: 60       # idle in mpv/games/vnc -> kill app and return to menu
-
-ui:
-  title: "SPARCstation"
-  fps: 60
-  font_size: 54
-  small_font_size: 28
+  # IMPORTANT: set to "menu" so start_lock.sh launches kiosk_shell.py
+  # kiosk_shell.py spawns puzzle_lock.py as a child for the lock.
+  post_unlock: "menu"
 
 paths:
   lock_py: "/home/pi/sparc_lock/puzzle_lock.py"
   launch_solaris_sh: "/home/pi/sparc_lock/launch_solaris.sh"
   mpv_input_conf: "/home/pi/sparc_lock/mpv.input.conf"
 
-  media_root: "/home/pi/sparc_media"
   media_images: "/home/pi/sparc_media/images"
   media_music: "/home/pi/sparc_media/music"
   media_videos: "/home/pi/sparc_media/videos"
@@ -32,6 +32,17 @@ paths:
 
 logs:
   shell_log: "/home/pi/sparc_lock/logs/kiosk_shell.log"
+  lock_child_log: "/home/pi/sparc_lock/logs/lock_child.log"
   mpv_log: "/home/pi/sparc_lock/logs/mpv.log"
   solaris_log: "/home/pi/sparc_lock/logs/solaris_vnc.log"
   games_log_dir: "/home/pi/sparc_lock/logs/games"
+
+vm:
+  enable_autostart: false
+  pidfile: "/home/pi/sparc_vm/qemu-sparc.pid"
+  start_cmd: ["/home/pi/sparc_vm/run_sol8.sh"]
+  cwd: "/home/pi/sparc_vm"
+  startup_grace_s: 1.0
+
+security:
+  pi_pin: "1193"
