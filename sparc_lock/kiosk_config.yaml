@@ -45,4 +45,4 @@ vm:
   startup_grace_s: 1.0
 
 security:
-  pi_pin: "1193"
+  pi_pin: "0000"
