@@ -46,3 +46,6 @@ sparc_lock/images/
 # Kiosk legacy session wrappers (retired)
 sparc_lock/*-session.sh
 sparc_lock/systemd/
+
+# Runtime backups / attic
+sparc_lock/_attic/

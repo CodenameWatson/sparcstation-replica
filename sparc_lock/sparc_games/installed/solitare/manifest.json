@@ -1,0 +1,8 @@
+{
+  "id": "solitaire",
+  "name": "Solitaire",
+  "type": "python",
+  "entry": "main.py",
+  "cwd": ".",
+  "env": {}
+}

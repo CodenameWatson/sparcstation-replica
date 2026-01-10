@@ -6,7 +6,7 @@ ui:
 
 idle:
   menu_seconds: 120
-  external_seconds: 30
+  external_seconds: 300  # recommended; 120 is very short
 
 feature_flags:
   enable_pi: true
@@ -15,20 +15,24 @@ feature_flags:
   enable_media: true
   enable_power: true
 
-  # IMPORTANT: set to "menu" so start_lock.sh launches kiosk_shell.py
-  # kiosk_shell.py spawns puzzle_lock.py as a child for the lock.
+  # Optional: only meaningful if start_lock.sh reads it
   post_unlock: "menu"
+
+  # Defensive: ensure we never drop to greeter/login via exit codes
+  pi_via_exit_code: true
+  solaris_via_exit_code: true
 
 paths:
   lock_py: "/home/pi/sparc_lock/puzzle_lock.py"
   launch_solaris_sh: "/home/pi/sparc_lock/launch_solaris.sh"
+  start_pi_mode_sh: "/home/pi/sparc_lock/start_pi_mode.sh"
   mpv_input_conf: "/home/pi/sparc_lock/mpv.input.conf"
 
-  media_images: "/home/pi/sparc_media/images"
-  media_music: "/home/pi/sparc_media/music"
-  media_videos: "/home/pi/sparc_media/videos"
+  media_images: "/home/pi/sparc_lock/sparc_media/images"
+  media_music: "/home/pi/sparc_lock/sparc_media/music"
+  media_videos: "/home/pi/sparc_lock/sparc_media/videos"
 
-  games_root: "/home/pi/sparc_games/installed"
+  games_root: "/home/pi/sparc_lock/sparc_games/installed"
 
 logs:
   shell_log: "/home/pi/sparc_lock/logs/kiosk_shell.log"
@@ -38,11 +42,11 @@ logs:
   games_log_dir: "/home/pi/sparc_lock/logs/games"
 
 vm:
-  enable_autostart: false
+  enable_autostart: true  # recommended unless your VM service is always-on
   pidfile: "/home/pi/sparc_vm/qemu-sparc.pid"
   start_cmd: ["/home/pi/sparc_vm/run_sol8.sh"]
   cwd: "/home/pi/sparc_vm"
   startup_grace_s: 1.0
 
 security:
-  pi_pin: "0000"
+  pi_pin: "000"
