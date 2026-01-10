@@ -68,6 +68,9 @@ EXCLUDES=(
   --exclude '_attic/'
   --exclude '__pycache__/'
   --exclude '.DS_Store'
+  --exclude '*.bak.*'
+  --exclude 'kiosk_shell.py.bak.*'
+  --exclude 'launch_solaris.sh.bak.*'
 )
 
 # Preserve local device assets unless explicitly asked
