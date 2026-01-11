@@ -170,6 +170,19 @@ if [[ "$ATOMIC" == "1" && "$DRY_RUN" != "1" ]]; then
     mv "$MEDIA_TMP" "$DST_LOCK/sparc_media"
     MEDIA_TMP=""
   fi
+  # Ensure logs dir exists and is writable by pi (prevents Permission denied)
+  mkdir -p "$DST_LOCK/logs" || true
+  chmod 775 "$DST_LOCK/logs" 2>/dev/null || true
+
+  # If logs isn't writable, try to repair ownership (best-effort)
+  if [[ ! -w "$DST_LOCK/logs" ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo chown -R pi:pi "$DST_LOCK/logs" 2>/dev/null || true
+      sudo chmod 775 "$DST_LOCK/logs" 2>/dev/null || true
+    fi
+  fi
+
+
 
   log "Swapped. Backup saved at: $BACKUP"
 fi
